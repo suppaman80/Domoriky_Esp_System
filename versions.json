@@ -1,7 +1,7 @@
 {
     "dashboard":  {
-                      "version":  "1.4.11",
-                      "url":  "https://github.com/suppaman80/Domoriky_Esp_System/releases/download/v1.4.11/ESP32_Dashboard_Controller.ino.bin",
+                      "version":  "1.4.13",
+                      "url":  "https://github.com/suppaman80/Domoriky_Esp_System/releases/download/v1.4.13/ESP32_Dashboard_Controller.ino.bin",
                       "mandatory":  false,
                       "notes":  "Initial Release"
                   },
@@ -13,8 +13,8 @@
                 },
     "nodes":  {
                   "4_RELAY_CONTROLLER":  {
-                                             "version":  "1.0.17",
-                                             "url":  "https://github.com/suppaman80/Domoriky_Esp_System/releases/download/v1.0.17/4_RELAY_CONTROLLER.ino.bin",
+                                             "version":  "1.0.18",
+                                             "url":  "https://github.com/suppaman80/Domoriky_Esp_System/releases/download/v1.0.18/4_RELAY_CONTROLLER.ino.bin",
                                              "mandatory":  false,
                                              "notes":  "Initial Release"
                                          }
