@@ -1,0 +1,19 @@
+# Arduino/PlatformIO build directories
+build/
+.pio/
+__pycache__/
+*.elf
+*.bin
+*.map
+*.hex
+*.bootloader.bin
+*.partitions.bin
+
+# Editor specific
+.vscode/
+.idea/
+*.swp
+
+# OS specific
+.DS_Store
+Thumbs.db

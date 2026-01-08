@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Domotica Dashboard</title>
+    <style>
+        :root { --primary: #0d6efd; --success: #198754; --danger: #dc3545; --warning: #ffc107; --dark: #212529; --light: #f8f9fa; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        header { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+        h1 { margin: 0; font-size: 24px; color: var(--dark); }
+        .status-badge { padding: 5px 10px; border-radius: 20px; font-size: 14px; font-weight: bold; }
+        .status-online { background-color: #d1e7dd; color: #0f5132; }
+        .status-offline { background-color: #f8d7da; color: #842029; }
+        
+        .gateway-card { background: white; border-radius: 10px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-left: 5px solid var(--primary); }
+        .gateway-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        .gateway-title { font-size: 18px; font-weight: bold; margin: 0; }
+        .gateway-info { font-size: 12px; color: #666; }
+        
+        .nodes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+        .node-card { background: #f8f9fa; border: 1px solid #eee; border-radius: 8px; padding: 15px; transition: transform 0.2s; }
+        .node-card:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+        .node-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .node-id { font-weight: bold; font-size: 16px; }
+        .node-type { font-size: 12px; background: #e9ecef; padding: 2px 6px; border-radius: 4px; color: #495057; }
+        
+        .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 15px; }
+        .btn { border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: all 0.2s; flex: 1; }
+        .btn-switch { background-color: #e9ecef; color: #495057; }
+        .btn-switch.active { background-color: var(--success); color: white; }
+        .btn-switch:hover:not(.active) { background-color: #dee2e6; }
+        
+        .loading { text-align: center; padding: 40px; color: #666; }
+        .no-data { text-align: center; padding: 20px; color: #999; font-style: italic; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>🏠 Domotica Dashboard (Anteprima)</h1>
+                <div style="font-size: 12px; color: #666; margin-top: 5px;">
+                    <span id="connection-status">Modalità Anteprima Offline</span> | 
+                    <span id="dashboard-version" style="font-weight: bold; color: #6610f2;">v1.0.0</span>
+                </div>
+            </div>
+            <div>
+                <button onclick="refreshDiscovery()" class="btn" style="background: var(--primary); color: white;">🔄 Aggiorna Rete</button>
+            </div>
+        </header>
+
+        <!-- System OTA Section -->
+        <div style="background: white; border-radius: 10px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-left: 5px solid #6610f2;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <div style="font-size: 18px; font-weight: bold;">Dashboard Update</div>
+                    <div style="font-size: 12px; color: #666;">Aggiorna il firmware di questo controller ESP32</div>
+                </div>
+                <div>
+                    <input type="file" id="system-firmware" accept=".bin" style="display: none" onchange="uploadSystemFirmware()">
+                    <button class="btn" style="background: #6610f2; color: white;" onclick="document.getElementById('system-firmware').click()">🚀 Aggiorna Dashboard</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="app">
+            <div class="loading">Caricamento dispositivi (Mock)...</div>
+        </div>
+    </div>
+
+    <script>
+        // MOCK DATA PER ANTEPRIMA
+        let gateways = {
+            "GATEWAY_001": {
+                ip: "192.168.1.100",
+                mqttStatus: "Connected",
+                uptime: 3600000,
+                lastSeen: Date.now(),
+                version: "1.0.0",
+                buildDate: "Dec 15 2025"
+            }
+        };
+        let peers = {
+            "RELAY_001": {
+                nodeId: "Living_Room",
+                nodeType: "4_RELAY_CONTROLLER",
+                gatewayId: "GATEWAY_001",
+                status: "online",
+                mac: "AA:BB:CC:DD:EE:FF",
+                lastSeen: Date.now()
+            }
+        };
+
+        function updateUI() {
+            const app = document.getElementById('app');
+            
+            if (Object.keys(gateways).length === 0) {
+                app.innerHTML = '<div class="no-data">Nessun Gateway rilevato. Assicurati che il sistema MQTT sia attivo.</div>';
+                return;
+            }
+
+            let html = '';
+            
+            for (const [gwId, gw] of Object.entries(gateways)) {
+                const isOnline = (Date.now() - gw.lastSeen) < 60000; 
+                
+                html += `
+                <div class="gateway-card">
+                    <div class="gateway-header">
+                        <div>
+                            <div class="gateway-title">Gateway: ${gwId}</div>
+                            <div class="gateway-info">
+                                IP: ${gw.ip || 'N/A'} | 
+                                MQTT: ${gw.mqttStatus || 'N/A'} | 
+                                Uptime: ${formatUptime(gw.uptime)}
+                            </div>
+                            <div class="gateway-info" style="color: #0d6efd; font-weight: bold; margin-top: 2px;">
+                                v${gw.version || '?'} (Build: ${gw.buildDate || 'N/A'})
+                            </div>
+                        </div>
+                        <span class="status-badge ${isOnline ? 'status-online' : 'status-offline'}">
+                            ${isOnline ? 'ONLINE' : 'OFFLINE'}
+                        </span>
+                    </div>
+                    
+                    <div style="margin-bottom: 15px; padding: 10px; background: #fff3cd; border-radius: 5px; display: flex; align-items: center; justify-content: space-between;">
+                        <span style="font-size: 14px; font-weight: bold; color: #856404;">OTA Update</span>
+                        <div>
+                            <input type="file" id="firmware-${gwId}" accept=".bin" style="display: none" onchange="uploadAndTriggerOTA('${gwId}')">
+                            <button class="btn" style="background: #ffc107; color: #000; font-size: 12px; padding: 5px 10px;" onclick="document.getElementById('firmware-${gwId}').click()">📂 Carica & Aggiorna</button>
+                        </div>
+                    </div>
+
+                    <div class="nodes-grid">`;
+                
+                const gwPeers = Object.values(peers).filter(p => p.gatewayId === gwId);
+                
+                if (gwPeers.length === 0) {
+                    html += '<div style="grid-column: 1/-1; text-align: center; color: #999;">Nessun nodo associato</div>';
+                } else {
+                    gwPeers.forEach(peer => {
+                        html += renderNodeCard(peer);
+                    });
+                }
+                
+                html += `</div></div>`;
+            }
+            
+            app.innerHTML = html;
+        }
+
+        function renderNodeCard(peer) {
+            const isOnline = peer.status === 'online';
+            let controlsHtml = '';
+            
+            if (peer.nodeType === '4_RELAY_CONTROLLER') {
+                controlsHtml = `
+                    <div class="controls">
+                        <button class="btn btn-switch" onclick="sendCommand('${peer.nodeId}', 'relay_1', '2')">Relè 1</button>
+                        <button class="btn btn-switch" onclick="sendCommand('${peer.nodeId}', 'relay_2', '2')">Relè 2</button>
+                        <button class="btn btn-switch" onclick="sendCommand('${peer.nodeId}', 'relay_3', '2')">Relè 3</button>
+                        <button class="btn btn-switch" onclick="sendCommand('${peer.nodeId}', 'relay_4', '2')">Relè 4</button>
+                    </div>
+                    <div class="controls" style="margin-top: 5px;">
+                        <button class="btn btn-switch" onclick="sendCommand('${peer.nodeId}', 'CONTROL', 'ALL_ON')">TUTTI ON</button>
+                        <button class="btn btn-switch" onclick="sendCommand('${peer.nodeId}', 'CONTROL', 'ALL_OFF')">TUTTI OFF</button>
+                    </div>
+                `;
+            } else {
+                controlsHtml = `<div style="margin-top:10px; font-size:12px; color:#999;">Controlli non disponibili per questo tipo</div>`;
+            }
+
+            return `
+                <div class="node-card">
+                    <div class="node-header">
+                        <span class="node-id">${peer.nodeId}</span>
+                        <span class="node-type">${peer.nodeType}</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:10px;">
+                        <span>MAC: ${peer.mac}</span>
+                        <span style="color: ${isOnline ? 'var(--success)' : 'var(--danger)'}; font-weight:bold;">
+                            ${isOnline ? '● Online' : '○ Offline'}
+                        </span>
+                    </div>
+                    ${controlsHtml}
+                </div>
+            `;
+        }
+
+        function sendCommand(nodeId, topic, command) {
+            console.log(`[MOCK] Sending command to ${nodeId}: ${topic}=${command}`);
+            alert(`Comando simulato: ${command} su ${nodeId}`);
+        }
+
+        function refreshDiscovery() {
+             console.log(`[MOCK] Refresh discovery`);
+             alert("Refresh simulato");
+        }
+        
+        function uploadSystemFirmware() {
+            alert("Upload firmware simulato");
+        }
+        
+        function uploadAndTriggerOTA(gwId) {
+             alert("Upload OTA Gateway simulato per " + gwId);
+        }
+
+        function formatUptime(ms) {
+            if (!ms) return '0m';
+            const mins = Math.floor(ms / 60000);
+            const hours = Math.floor(mins / 60);
+            if (hours > 0) return `${hours}h ${mins % 60}m`;
+            return `${mins}m`;
+        }
+
+        // Avvio immediato
+        updateUI();
+    </script>
+</body>
+</html>
