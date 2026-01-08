@@ -6,8 +6,8 @@
                       "notes":  "Initial Release"
                   },
     "gateway":  {
-                    "version":  "1.4.15",
-                    "url":  "https://github.com/suppaman80/Domoriky_Esp_System/releases/download/v1.4.15/ESP8266_Gateway_mqtt.ino.bin",
+                    "version":  "1.4.16",
+                    "url":  "https://github.com/suppaman80/Domoriky_Esp_System/releases/download/v1.4.16/ESP8266_Gateway_mqtt.ino.bin",
                     "mandatory":  false,
                     "notes":  "Initial Release"
                 },
