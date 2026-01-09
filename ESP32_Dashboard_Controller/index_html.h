@@ -281,97 +281,229 @@ nodeTypesConfig = {
 };
 });
 }
-function uploadGatewayFirmware(ip, input, attempt = 1) {
-if (input.files.length === 0) return;
-const file = input.files[0];
-const maxAttempts = 3;
-if (attempt === 1 && !confirm(`Sei sicuro di voler aggiornare il firmware del Gateway (${ip}) con il file:\n${file.name}?`)) {
-input.value = '';
-return;
+// --- Refactored OTA Functions ---
+
+// 1. Gateway Auto Update
+function startAutoUpdateGateway(url, ip, btn) {
+    if(!confirm(`Avviare aggiornamento automatico Gateway (${ip}) da GitHub?\nVersione: ${url.split('/').pop()}`)) return;
+
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span style="display:inline-block; animation:spin 1s linear infinite">↻</span> DL...';
+
+    showToast("Download firmware da GitHub...", "info");
+
+    fetch(url)
+    .then(res => {
+        if (!res.ok) throw new Error(`Download fallito (${res.status})`);
+        return res.blob();
+    })
+    .then(blob => {
+        const filename = url.split('/').pop() || "firmware.bin";
+        const file = new File([blob], filename, { type: "application/octet-stream" });
+        
+        btn.innerHTML = '<span style="display:inline-block; animation:spin 1s linear infinite">↻</span> Install...';
+        uploadGatewayFirmware(ip, file, 1, btn, originalText);
+    })
+    .catch(err => {
+        console.error(err);
+        showToast("Errore Download: " + err.message, "error");
+        btn.innerHTML = "⚠️ Err";
+        setTimeout(() => {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }, 3000);
+    });
 }
-const statusId = 'ota-status-' + ip.replace(/\./g, '-');
-let statusDiv = document.getElementById(statusId);
-if (!statusDiv) {
-statusDiv = document.createElement('div');
-statusDiv.id = statusId;
-statusDiv.style.cssText = "position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:rgba(0,0,0,0.8); color:white; padding:20px; border-radius:10px; z-index:1000; text-align:center; min-width:300px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);";
-document.body.appendChild(statusDiv);
+
+// 2. Node Auto Update
+function startAutoUpdateNode(nodeId, gatewayId, url, btn) {
+    if (!gatewayId || !gateways[gatewayId]) {
+        alert("Errore: Gateway non trovato.");
+        return;
+    }
+    
+    if(!confirm(`Avviare aggiornamento automatico Nodo ${nodeId} da GitHub?\nVersione: ${url.split('/').pop()}`)) return;
+
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span style="display:inline-block; animation:spin 1s linear infinite">↻</span> DL...';
+    
+    showToast("Download firmware da GitHub...", "info");
+
+    fetch(url)
+    .then(res => {
+        if (!res.ok) throw new Error(`Download fallito (${res.status})`);
+        return res.blob();
+    })
+    .then(blob => {
+        const filename = url.split('/').pop() || "firmware.bin";
+        const file = new File([blob], filename, { type: "application/octet-stream" });
+        
+        // Setup monitoring context
+        otaTargetNode = nodeId;
+        otaTargetGatewayIp = gateways[gatewayId].ip;
+        otaBtnElement = btn;
+        
+        // Call the upload logic directly
+        performNodeOtaUpload(file, btn, originalText);
+    })
+    .catch(err => {
+        console.error(err);
+        showToast("Errore Download: " + err.message, "error");
+        btn.innerHTML = "⚠️ Err";
+        setTimeout(() => {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }, 3000);
+    });
 }
-statusDiv.innerHTML = `Avvio aggiornamento Gateway (${ip})...<br>Tentativo ${attempt}/${maxAttempts}<br>File: ${file.name}`;
-const formData = new FormData();
-formData.append("update", file);
-const xhr = new XMLHttpRequest();
-xhr.open("POST", `http://${ip}/update_gateway`, true);
-xhr.timeout = 30000;
-xhr.upload.onprogress = function(e) {
-if (e.lengthComputable) {
-const percent = Math.round((e.loaded / e.total) * 100);
-statusDiv.innerHTML = `Caricamento firmware Gateway (${ip})...<br>Progresso: ${percent}%<br>File: ${file.name}`;
+
+function uploadGatewayFirmware(ip, fileOrInput, attempt = 1, btn = null, originalBtnText = null) {
+    let file;
+    if (fileOrInput instanceof HTMLElement) { // Input element
+        if (fileOrInput.files.length === 0) return;
+        file = fileOrInput.files[0];
+        if (attempt === 1 && !confirm(`Aggiornare Gateway (${ip}) con:\n${file.name}?`)) {
+            fileOrInput.value = '';
+            return;
+        }
+    } else { // File object (Auto update)
+        file = fileOrInput;
+    }
+
+    const maxAttempts = 3;
+    const statusId = 'ota-status-' + ip.replace(/\./g, '-');
+    let statusDiv = document.getElementById(statusId);
+    if (!statusDiv) {
+        statusDiv = document.createElement('div');
+        statusDiv.id = statusId;
+        statusDiv.style.cssText = "position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:rgba(0,0,0,0.8); color:white; padding:20px; border-radius:10px; z-index:1000; text-align:center; min-width:300px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);";
+        document.body.appendChild(statusDiv);
+    }
+    statusDiv.innerHTML = `Avvio aggiornamento Gateway (${ip})...<br>Tentativo ${attempt}/${maxAttempts}<br>File: ${file.name}`;
+
+    const formData = new FormData();
+    formData.append("update", file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `http://${ip}/update_gateway`, true);
+    xhr.timeout = 60000; // 60s timeout for upload
+
+    xhr.upload.onprogress = function(e) {
+        if (e.lengthComputable) {
+            const percent = Math.round((e.loaded / e.total) * 100);
+            statusDiv.innerHTML = `Gateway Upload (${ip}): ${percent}%<br>Tentativo ${attempt}/${maxAttempts}`;
+        }
+    };
+
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            statusDiv.innerHTML = `✅ Aggiornamento Riuscito!<br>Riavvio Gateway in corso...`;
+            statusDiv.style.background = "rgba(40, 167, 69, 0.9)";
+            setTimeout(() => {
+                if(statusDiv) statusDiv.remove();
+                if(btn && originalBtnText) {
+                     btn.innerHTML = originalBtnText;
+                     btn.disabled = false;
+                }
+            }, 5000);
+        } else {
+            handleGwError(`Errore HTTP: ${xhr.status}`);
+        }
+    };
+
+    xhr.onerror = function() {
+        handleGwError("Errore di Rete");
+    };
+
+    xhr.ontimeout = function() {
+        handleGwError("Timeout Connessione");
+    };
+
+    function handleGwError(msg) {
+        console.error(`Gateway OTA Error (Attempt ${attempt}):`, msg);
+        if (attempt < maxAttempts) {
+            statusDiv.innerHTML = `⚠️ Errore: ${msg}<br>Riprovo tra 2s (Tentativo ${attempt+1})...`;
+            setTimeout(() => {
+                uploadGatewayFirmware(ip, file, attempt + 1, btn, originalBtnText);
+            }, 2000);
+        } else {
+            statusDiv.innerHTML = `❌ Aggiornamento Fallito dopo ${maxAttempts} tentativi.<br>Errore: ${msg}`;
+            statusDiv.style.background = "rgba(220, 53, 69, 0.9)";
+            setTimeout(() => { if(statusDiv) statusDiv.remove(); }, 5000);
+            if(btn && originalBtnText) {
+                btn.innerHTML = "❌";
+                setTimeout(() => {
+                    btn.innerHTML = originalBtnText;
+                    btn.disabled = false;
+                }, 3000);
+            }
+        }
+    }
+
+    xhr.send(formData);
 }
-};
-xhr.onload = function() {
-if (xhr.status === 200) {
-statusDiv.innerHTML = "✅ Aggiornamento completato!<br>Il Gateway si sta riavviando.";
-statusDiv.style.background = "rgba(40, 167, 69, 0.95)";
-setTimeout(() => statusDiv.remove(), 5000);
-input.value = '';
-} else {
-statusDiv.innerHTML = `❌ Errore aggiornamento: ${xhr.status}<br>${xhr.responseText}`;
-statusDiv.style.background = "rgba(220, 53, 69, 0.95)";
-setTimeout(() => statusDiv.remove(), 5000);
-input.value = '';
+function performDashboardAutoUpdate(url, btn) {
+    if(!confirm(`Avviare aggiornamento automatico Dashboard da GitHub?\nVersione: ${url.split('/').pop()}`)) return;
+
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span style="display:inline-block; animation:spin 1s linear infinite">↻</span> Avvio...';
+    
+    showToast("Richiesta aggiornamento inviata...", "info");
+
+    fetch('/api/update_from_url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'url=' + encodeURIComponent(url)
+    })
+    .then(res => {
+        if (!res.ok) throw new Error("Errore avvio update: " + res.status);
+        return res.text();
+    })
+    .then(text => {
+        showToast("Aggiornamento Avviato! Il dispositivo si riavvierà.", "success");
+        btn.innerHTML = "✅ Rebooting...";
+        setTimeout(() => location.reload(), 15000);
+    })
+    .catch(err => {
+        console.error(err);
+        showToast("Errore: " + err.message, "error");
+        btn.innerHTML = "⚠️ Err";
+        setTimeout(() => {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }, 3000);
+    });
 }
-};
-const retry = () => {
-if (xhr.status === 0 && attempt === 1) {
-statusDiv.innerHTML = `⚠️ Errore Connessione/CORS rilevato.<br>Tento invio 'Blind' (senza feedback progresso)...`;
-statusDiv.style.background = "rgba(255, 193, 7, 0.95)";
-statusDiv.style.color = "black";
-fetch(`http://${ip}/update_gateway`, {
-method: 'POST',
-body: formData,
-mode: 'no-cors'
-})
-.then(() => {
-statusDiv.innerHTML = "✅ Invio 'Blind' completato.<br>Se il file è corretto, il Gateway si riavvierà tra poco.<br>(Nessuna conferma possibile)";
-statusDiv.style.background = "rgba(40, 167, 69, 0.95)";
-statusDiv.style.color = "white";
-setTimeout(() => statusDiv.remove(), 7000);
-input.value = '';
-})
-.catch(e => {
-statusDiv.innerHTML = `❌ Errore Blind Fetch: ${e.message}`;
-statusDiv.style.background = "rgba(220, 53, 69, 0.95)";
-statusDiv.style.color = "white";
-setTimeout(() => statusDiv.remove(), 5000);
-});
-return;
-}
-if (attempt < maxAttempts) {
-statusDiv.innerHTML = `⚠️ Errore connessione (${ip}).<br>Riprovo tra 3 secondi (Tentativo ${attempt + 1}/${maxAttempts})...`;
-statusDiv.style.background = "rgba(255, 193, 7, 0.95)";
-statusDiv.style.color = "black";
-setTimeout(() => {
-uploadGatewayFirmware(ip, input, attempt + 1);
-}, 3000);
-} else {
-statusDiv.innerHTML = `❌ Errore di connessione a ${ip} dopo ${maxAttempts} tentativi.<br>Verifica che il Gateway sia online e raggiungibile dallo stesso network.`;
-statusDiv.style.background = "rgba(220, 53, 69, 0.95)";
-statusDiv.style.color = "white";
-setTimeout(() => statusDiv.remove(), 7000);
-input.value = '';
-}
-};
-xhr.onerror = retry;
-xhr.ontimeout = retry;
-try {
-xhr.send(formData);
-} catch (e) {
-console.error("XHR Send Error:", e);
-retry();
-}
-}
+
 function updateUI() {
+    // 1. Check Dashboard Update & Inject Button if needed
+    const dashVerElem = document.getElementById('sys-fw');
+    if (dashVerElem && dashboardData.updates && dashboardData.updates.dashboard && dashboardData.updates.dashboard.available) {
+        const onlineVer = dashboardData.updates.dashboard.version;
+        const currentVer = dashboardData.version;
+        const url = dashboardData.updates.dashboard.url;
+        
+        // Remove existing button if any
+        const existingBtn = document.getElementById('dash-auto-update-btn');
+        if (existingBtn) existingBtn.remove();
+
+        if (compareVersions(onlineVer, currentVer) > 0) {
+            const btn = document.createElement('button');
+            btn.id = 'dash-auto-update-btn';
+            btn.className = 'status-badge';
+            btn.style.cssText = "background: #ffc107; color: black; border: 1px solid #d39e00; cursor: pointer; margin-left:10px; animation: pulse 2s infinite; font-size: 14px; padding: 2px 8px;";
+            btn.innerHTML = `⚠️ Update v${onlineVer}`;
+            btn.title = `Aggiorna Dashboard a v${onlineVer}`;
+            btn.onclick = function() { performDashboardAutoUpdate(url, this); };
+            
+            // Append next to firmware version
+            dashVerElem.parentNode.appendChild(btn);
+        }
+    }
+
 const app = document.getElementById('app');
 if (Object.keys(gateways).length === 0) {
 app.innerHTML = '<div class="no-data">Nessun Gateway rilevato. Assicurati che il sistema MQTT sia attivo.</div>';
@@ -383,14 +515,14 @@ for (const [gwId, gw] of Object.entries(gateways)) {
 const isOnline = true;
 let gwUpdateBtn = '';
 if (dashboardData.updates && dashboardData.updates.gateway) {
-const gwOnlineVer = dashboardData.updates.gateway.version;
-const gwUrl = dashboardData.updates.gateway.url;
-if (gw.version && compareVersions(gwOnlineVer, gw.version) > 0) {
-gwUpdateBtn = `
-<a href="${gwUrl}" target="_blank" class="status-badge" style="background: #ffc107; color: black; text-decoration: none; margin-right:5px; border: 1px solid #d39e00;" title="Scarica Aggiornamento v${gwOnlineVer}">
-⚠️ Update v${gwOnlineVer}
-</a>`;
-}
+    const gwOnlineVer = dashboardData.updates.gateway.version;
+    const gwUrl = dashboardData.updates.gateway.url;
+    if (gw.version && compareVersions(gwOnlineVer, gw.version) > 0) {
+        gwUpdateBtn = `
+        <button class="status-badge" style="background: #ffc107; color: black; border: 1px solid #d39e00; cursor: pointer; margin-right:5px; animation: pulse 2s infinite;" onclick="startAutoUpdateGateway('${gwUrl}', '${gw.ip}', this)" title="Aggiorna Automaticamente a v${gwOnlineVer}">
+        ⚠️ Update v${gwOnlineVer}
+        </button>`;
+    }
 }
 html += `
 <div class="gateway-card">
@@ -557,39 +689,40 @@ controlsHtml += `
 } else {
 controlsHtml = `<div style="margin-top:10px; font-size:12px; color:#999;">Controlli non disponibili per questo tipo: ${peer.nodeType}</div>`;
 }
-let otaBtnStyle = "background: #6610f2; color: white;";
-let otaTitle = "OTA Update";
-let otaBadge = "";
-if (dashboardData.updates && dashboardData.updates.nodes) {
-        const nodeType = peer.nodeType || "DEFAULT";
-        let updateInfo = dashboardData.updates.nodes[nodeType];
-        
-        // Debug Update Logic
-        console.log(`[DEBUG] Node: ${peer.nodeId}, Type: ${nodeType}, FW: ${peer.firmwareVersion}`);
-        if(updateInfo) console.log(`[DEBUG] Update Found for Type ${nodeType}: v${updateInfo.version}`);
-        else console.log(`[DEBUG] No Update Info for Type ${nodeType}`);
 
-        if (!updateInfo && nodeType === "UNKNOWN") updateInfo = dashboardData.updates.nodes["DEFAULT"];
-        if (updateInfo && updateInfo.version) {
-            if (compareVersions(updateInfo.version, peer.firmwareVersion) > 0) {
-                console.log(`[DEBUG] UPDATE AVAILABLE! ${updateInfo.version} > ${peer.firmwareVersion}`);
-                otaBtnStyle = "background: #ffc107; color: black; border: 2px solid #e0a800; animation: pulse 2s infinite;";
-                otaTitle = "Aggiornamento Disponibile v" + updateInfo.version;
-                otaBadge = `<span style="font-size:10px; background:#ffc107; color:black; padding:2px 4px; border-radius:3px; margin-right:5px; font-weight:bold;">v${updateInfo.version}</span>`;
-            } else {
-                 console.log(`[DEBUG] NO UPDATE: ${updateInfo.version} <= ${peer.firmwareVersion}`);
-            }
+let autoOtaBtn = "";
+
+if (dashboardData.updates && dashboardData.updates.nodes) {
+    const nodeType = peer.nodeType || "DEFAULT";
+    let updateInfo = dashboardData.updates.nodes[nodeType];
+    
+    // Debug Update Logic
+    // console.log(`[DEBUG] Node: ${peer.nodeId}, Type: ${nodeType}, FW: ${peer.firmwareVersion}`);
+    
+    if (!updateInfo && nodeType === "UNKNOWN") updateInfo = dashboardData.updates.nodes["DEFAULT"];
+    
+    if (updateInfo && updateInfo.version) {
+        if (compareVersions(updateInfo.version, peer.firmwareVersion) > 0) {
+            console.log(`[DEBUG] UPDATE AVAILABLE! ${updateInfo.version} > ${peer.firmwareVersion}`);
+            
+            autoOtaBtn = `
+            <button class="status-badge" style="background: #ffc107; color: black; border: 1px solid #d39e00; cursor: pointer; margin-right:5px; animation: pulse 2s infinite; font-size: 12px; padding: 4px 8px;" 
+            onclick="startAutoUpdateNode('${peer.nodeId}', '${peer.gatewayId}', '${updateInfo.url}', this)" 
+            title="Aggiorna Automaticamente a v${updateInfo.version}">⚠️ Update v${updateInfo.version}</button>`;
         }
     }
+}
+
 controlsHtml += `
 <div style="margin-top: 10px; border-top: 1px solid #ddd; padding-top: 8px; display: flex; justify-content: flex-end; gap: 5px; align-items: center;">
-${otaBadge}
-<button class="btn" style="${otaBtnStyle} padding: 4px 8px; font-size: 12px; flex: 0;" onclick="startNodeOta('${peer.nodeId}', '${peer.gatewayId}', this)" title="${otaTitle}">🚀</button>
+${autoOtaBtn}
+<button class="btn" style="background: #6610f2; color: white; padding: 4px 8px; font-size: 12px; flex: 0;" onclick="startNodeOta('${peer.nodeId}', '${peer.gatewayId}', this)" title="Upload Manuale Firmware (.bin)">🚀</button>
 <button class="btn" style="background: #ffc107; color: black; padding: 4px 8px; font-size: 12px; flex: 0;" onclick="sendAdminCommand('${peer.nodeId}', 'RESTART', '${peer.gatewayId}', null, this)" title="Riavvia Nodo">🔄</button>
 <button class="btn" style="background: #fd7e14; color: white; padding: 4px 8px; font-size: 12px; flex: 0;" onclick="sendAdminCommand('${peer.nodeId}', 'NODE_FACTORY_RESET', '${peer.gatewayId}', null, this)" title="Factory Reset Nodo">⚠️</button>
 <button class="btn" style="background: #dc3545; color: white; padding: 4px 8px; font-size: 12px; flex: 0;" onclick="sendAdminCommand('${peer.nodeId}', 'REMOVE_PEER', '${peer.gatewayId}', '${peer.mac}', this)" title="Elimina Nodo">🗑️</button>
 </div>
 `;
+
 return `
 <div class="node-card">
 <div class="node-header">
@@ -811,73 +944,95 @@ otaBtnElement = btn;
 document.getElementById('node-ota-file').click();
 }
 function handleNodeOtaUpload() {
-const fileInput = document.getElementById('node-ota-file');
-const file = fileInput.files[0];
-if (!file) return;
-if (!confirm("Avviare OTA per il nodo " + otaTargetNode + "?\nIl firmware verrà caricato sulla Dashboard e il nodo lo scaricherà direttamente.")) {
-fileInput.value = "";
-return;
+    const fileInput = document.getElementById('node-ota-file');
+    const file = fileInput.files[0];
+    if (!file) return;
+
+    if (!confirm("Avviare OTA per il nodo " + otaTargetNode + "?\nIl firmware verrà caricato sulla Dashboard e il nodo lo scaricherà direttamente.")) {
+        fileInput.value = "";
+        return;
+    }
+
+    const btn = otaBtnElement;
+    const originalBtnContent = btn.innerHTML;
+    
+    performNodeOtaUpload(file, btn, originalBtnContent, () => {
+        fileInput.value = "";
+    });
 }
-const formData = new FormData();
-formData.append("update", file);
-const peer = Object.values(peers).find(p => p.nodeId === otaTargetNode);
-const currentVer = peer ? peer.firmwareVersion : '?';
-const btn = otaBtnElement;
-const originalBtnContent = btn.innerHTML;
-btn.disabled = true;
-btn.innerHTML = '<span style="display:inline-block; animation:spin 1s linear infinite">↻</span>';
-activeOtaMonitors[otaTargetNode] = {
-startVersion: currentVer,
-startTime: Date.now(),
-btn: btn,
-originalContent: originalBtnContent,
-status: 'uploading'
-};
-updateOtaOverlay();
-fetch('/api/upload_node_fw', {
-method: 'POST',
-body: formData
-})
-.then(async res => {
-if (!res.ok) throw new Error("Upload fallito: " + res.status);
-const dashboardIp = (dashboardData && dashboardData.dashboard && dashboardData.dashboard.ip) ? dashboardData.dashboard.ip : window.location.hostname;
-const firmwareUrl = "http://" + dashboardIp + "/temp_firmware.bin";
-const triggerData = new URLSearchParams();
-triggerData.append("nodeId", otaTargetNode);
-triggerData.append("url", firmwareUrl);
-activeOtaMonitors[otaTargetNode].status = 'triggering';
-updateOtaOverlay();
-return fetch('http://' + otaTargetGatewayIp + '/trigger_ota', {
-method: 'POST',
-headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-body: triggerData
-});
-})
-.then(async res => {
-if (!res.ok) throw new Error("Trigger OTA fallito: " + res.status);
-if (activeOtaMonitors[otaTargetNode]) {
-activeOtaMonitors[otaTargetNode].status = 'waiting_node';
-updateOtaOverlay();
+
+function performNodeOtaUpload(file, btn, originalBtnContent, cleanupCallback = null) {
+    const formData = new FormData();
+    formData.append("update", file);
+
+    const peer = Object.values(peers).find(p => p.nodeId === otaTargetNode);
+    const currentVer = peer ? peer.firmwareVersion : '?';
+
+    if(btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span style="display:inline-block; animation:spin 1s linear infinite">↻</span>';
+    }
+
+    activeOtaMonitors[otaTargetNode] = {
+        startVersion: currentVer,
+        startTime: Date.now(),
+        btn: btn,
+        originalContent: originalBtnContent,
+        status: 'uploading'
+    };
+    updateOtaOverlay();
+
+    fetch('/api/upload_node_fw', {
+        method: 'POST',
+        body: formData
+    })
+    .then(async res => {
+        if (!res.ok) throw new Error("Upload fallito: " + res.status);
+        
+        const dashboardIp = (dashboardData && dashboardData.dashboard && dashboardData.dashboard.ip) ? dashboardData.dashboard.ip : window.location.hostname;
+        const firmwareUrl = "http://" + dashboardIp + "/temp_firmware.bin";
+        
+        const triggerData = new URLSearchParams();
+        triggerData.append("nodeId", otaTargetNode);
+        triggerData.append("url", firmwareUrl);
+        
+        if (activeOtaMonitors[otaTargetNode]) {
+            activeOtaMonitors[otaTargetNode].status = 'triggering';
+            updateOtaOverlay();
+        }
+
+        return fetch('http://' + otaTargetGatewayIp + '/trigger_ota', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: triggerData
+        });
+    })
+    .then(async res => {
+        if (!res.ok) throw new Error("Trigger OTA fallito: " + res.status);
+        if (activeOtaMonitors[otaTargetNode]) {
+            activeOtaMonitors[otaTargetNode].status = 'waiting_node';
+            updateOtaOverlay();
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert("Errore OTA: " + err.message);
+        if (activeOtaMonitors[otaTargetNode]) {
+            const m = activeOtaMonitors[otaTargetNode];
+            if (m.btn) {
+                m.btn.disabled = false;
+                m.btn.innerHTML = "❌";
+                setTimeout(() => m.btn.innerHTML = m.originalContent, 3000);
+            }
+            delete activeOtaMonitors[otaTargetNode];
+            updateOtaOverlay();
+        }
+    })
+    .finally(() => {
+        if (cleanupCallback) cleanupCallback();
+    });
 }
-})
-.catch(err => {
-console.error(err);
-alert("Errore OTA: " + err.message);
-if (activeOtaMonitors[otaTargetNode]) {
-const m = activeOtaMonitors[otaTargetNode];
-if (m.btn) {
-m.btn.disabled = false;
-m.btn.innerHTML = "❌";
-setTimeout(() => m.btn.innerHTML = m.originalContent, 3000);
-}
-delete activeOtaMonitors[otaTargetNode];
-updateOtaOverlay();
-}
-})
-.finally(() => {
-fileInput.value = "";
-});
-}
+
 function updateOtaOverlay() {
 let container = document.getElementById('ota-monitor-overlay');
 if (!container) {

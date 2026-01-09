@@ -1,20 +1,20 @@
 {
     "dashboard":  {
-                      "version":  "1.4.13",
-                      "url":  "https://github.com/suppaman80/Domoriky_Esp_System/releases/download/v1.4.13/ESP32_Dashboard_Controller.ino.bin",
+                      "version":  "1.4.26",
+                      "url":  "https://raw.githubusercontent.com/suppaman80/Domoriky_Esp_System/master/bin/ESP32_Dashboard_Controller.ino.bin",
                       "mandatory":  false,
                       "notes":  "Initial Release"
                   },
     "gateway":  {
-                    "version":  "1.4.16",
-                    "url":  "https://github.com/suppaman80/Domoriky_Esp_System/releases/download/v1.4.16/ESP8266_Gateway_mqtt.ino.bin",
+                    "version":  "1.4.17",
+                    "url":  "https://raw.githubusercontent.com/suppaman80/Domoriky_Esp_System/master/bin/ESP8266_Gateway_mqtt.ino.bin",
                     "mandatory":  false,
                     "notes":  "Initial Release"
                 },
     "nodes":  {
                   "4_RELAY_CONTROLLER":  {
-                                             "version":  "1.0.18",
-                                             "url":  "https://github.com/suppaman80/Domoriky_Esp_System/releases/download/v1.0.18/4_RELAY_CONTROLLER.ino.bin",
+                                             "version":  "1.0.19",
+                                             "url":  "https://raw.githubusercontent.com/suppaman80/Domoriky_Esp_System/master/bin/4_RELAY_CONTROLLER.ino.bin",
                                              "mandatory":  false,
                                              "notes":  "Initial Release"
                                          }
