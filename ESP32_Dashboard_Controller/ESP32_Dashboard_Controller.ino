@@ -1,4 +1,7 @@
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <PubSubClient.h>
@@ -28,6 +31,11 @@ DNSServer dnsServer;
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 File uploadFile;
+
+// Variabili per aggiornamenti GitHub
+SystemUpdates systemUpdates;
+const char* GITHUB_VERSION_URL = "https://raw.githubusercontent.com/suppaman80/Domoriky_Esp_System/master/versions.json";
+const unsigned long UPDATE_CHECK_INTERVAL = 3600000; // Controlla ogni ora (1 ora = 3600000 ms)
 
 unsigned long lastMqttReconnectAttempt = 0;
 const unsigned long MQTT_RECONNECT_INTERVAL = 5000;
@@ -838,6 +846,40 @@ void populateJson(DynamicJsonDocument& doc) {
         p["attributes"] = peer.attributes;
         p["lastSeen"] = peer.lastSeen;
     }
+    
+    // System Updates
+    JsonObject updatesObj = doc.createNestedObject("updates");
+    
+    if (systemUpdates.dashboard.available) {
+        JsonObject dashUpd = updatesObj.createNestedObject("dashboard");
+        dashUpd["available"] = true;
+        dashUpd["version"] = systemUpdates.dashboard.version;
+        dashUpd["url"] = systemUpdates.dashboard.url;
+        dashUpd["notes"] = systemUpdates.dashboard.notes;
+        DevLog.printf("[JSON] Dash Update added: v%s\n", systemUpdates.dashboard.version.c_str());
+    }
+
+    if (systemUpdates.gateway.available) {
+        JsonObject gwUpd = updatesObj.createNestedObject("gateway");
+        gwUpd["version"] = systemUpdates.gateway.version;
+        gwUpd["url"] = systemUpdates.gateway.url;
+        gwUpd["notes"] = systemUpdates.gateway.notes;
+        DevLog.printf("[JSON] Gateway Update added: v%s\n", systemUpdates.gateway.version.c_str());
+    }
+    
+    JsonObject nodesUpdObj = updatesObj.createNestedObject("nodes");
+    for (auto const& [type, info] : systemUpdates.nodes) {
+        if (info.available) {
+            JsonObject n = nodesUpdObj.createNestedObject(type);
+            n["version"] = info.version;
+            n["url"] = info.url;
+            n["notes"] = info.notes;
+            DevLog.printf("[JSON] Node Update added for %s: v%s\n", type.c_str(), info.version.c_str());
+        }
+    }
+    
+    updatesObj["lastCheck"] = systemUpdates.lastCheck;
+    updatesObj["lastResult"] = systemUpdates.lastResult;
 }
 
 void handleApiData() {
@@ -1027,6 +1069,40 @@ void handleApiCommand() {
 }
 
 // --- System Update Handlers ---
+void handleUpdateFromUrl() {
+    if (!server.hasArg("url")) {
+        server.send(400, "text/plain", "Missing URL");
+        return;
+    }
+    String url = server.arg("url");
+    
+    DevLog.printf("[OTA] Starting update from: %s\n", url.c_str());
+    
+    // Invia risposta immediata perché l'update bloccherà/riavvierà
+    server.send(200, "text/plain", "Update started. Device will reboot.");
+    delay(500); 
+    
+    WiFiClientSecure client;
+    client.setInsecure();
+    
+    httpUpdate.setLedPin(-1);
+    httpUpdate.rebootOnUpdate(true);
+    
+    t_httpUpdate_return ret = httpUpdate.update(client, url);
+    
+    switch (ret) {
+        case HTTP_UPDATE_FAILED:
+            DevLog.printf("[OTA] Error (%d): %s\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+            break;
+        case HTTP_UPDATE_NO_UPDATES:
+            DevLog.println("[OTA] No updates");
+            break;
+        case HTTP_UPDATE_OK:
+            DevLog.println("[OTA] Update OK");
+            break;
+    }
+}
+
 void handleSystemUpdate() {
     server.sendHeader("Connection", "close");
     if (Update.hasError()) {
@@ -1063,6 +1139,167 @@ void handleSystemUpdateUpload() {
 
 void cleanupStaleDevices() {
     // DISABILITATO SU RICHIESTA UTENTE
+}
+
+// --- Helper SemVer Comparison ---
+// Returns: 1 if v1 > v2, -1 if v1 < v2, 0 if equal
+int compareVersions(String v1, String v2) {
+    int i = 0, j = 0;
+    while (i < v1.length() || j < v2.length()) {
+        int num1 = 0;
+        // Skip non-digit characters for v1
+        while (i < v1.length() && !isdigit(v1.charAt(i))) i++;
+        
+        while (i < v1.length() && isdigit(v1.charAt(i))) {
+            num1 = num1 * 10 + (v1.charAt(i) - '0');
+            i++;
+        }
+        
+        int num2 = 0;
+        // Skip non-digit characters for v2
+        while (j < v2.length() && !isdigit(v2.charAt(j))) j++;
+
+        while (j < v2.length() && isdigit(v2.charAt(j))) {
+            num2 = num2 * 10 + (v2.charAt(j) - '0');
+            j++;
+        }
+        
+        if (num1 > num2) return 1;
+        if (num1 < num2) return -1;
+        
+        // Skip dots or other separators
+        while (i < v1.length() && !isdigit(v1.charAt(i))) i++;
+        while (j < v2.length() && !isdigit(v2.charAt(j))) j++;
+    }
+    return 0;
+}
+
+// --- GitHub Update Checker ---
+void checkGithubUpdates() {
+    if (WiFi.status() != WL_CONNECTED) {
+        systemUpdates.lastResult = "No WiFi Connection";
+        systemUpdates.lastCheck = millis();
+        broadcastUpdate();
+        return;
+    }
+
+    DevLog.println("[UPDATER] Checking for updates on GitHub...");
+    DevLog.printf("[UPDATER] Free Heap: %d bytes\n", ESP.getFreeHeap());
+
+    // Check DNS resolution
+    IPAddress remote_ip;
+    if (!WiFi.hostByName("raw.githubusercontent.com", remote_ip)) {
+        DevLog.println("[UPDATER] DNS Failed for raw.githubusercontent.com");
+        systemUpdates.lastResult = "DNS Failed";
+        systemUpdates.lastCheck = millis(); // Update check time to notify frontend
+        broadcastUpdate();
+        return;
+    }
+    DevLog.printf("[UPDATER] DNS Resolved: %s\n", remote_ip.toString().c_str());
+    
+    HTTPClient http;
+    // Usa setInsecure per semplicità
+    WiFiClientSecure *client = new WiFiClientSecure;
+    if(client) {
+        client->setInsecure();
+        client->setHandshakeTimeout(20000); // 20s handshake timeout
+        
+        // Add cache busting parameter
+        String url = String(GITHUB_VERSION_URL) + "?t=" + String(millis());
+        
+        if (http.begin(*client, url)) {
+            http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+            http.setTimeout(20000); // 20s HTTP timeout
+
+            DevLog.println("[UPDATER] Connecting to GitHub...");
+            int httpCode = http.GET();
+            DevLog.printf("[UPDATER] HTTP Code: %d\n", httpCode);
+
+            systemUpdates.lastCheck = millis(); // Update timestamp regardless of result
+
+            if (httpCode == HTTP_CODE_OK) {
+                String payload = http.getString();
+                DevLog.println("[UPDATER] Versions.json downloaded");
+                // DevLog.println(payload); // Optional: Debug payload
+                
+                DynamicJsonDocument doc(2048);
+                DeserializationError error = deserializeJson(doc, payload);
+                
+                if (!error) {
+                    systemUpdates.lastResult = "Success";
+                    
+                    // Dashboard Check
+                    String onlineDashVer = doc["dashboard"]["version"].as<String>();
+                    DevLog.printf("[UPDATER] Online Dash: %s, Current: %s\n", onlineDashVer.c_str(), FIRMWARE_VERSION);
+
+                    if (compareVersions(onlineDashVer, FIRMWARE_VERSION) > 0) {
+                        systemUpdates.dashboard.available = true;
+                        systemUpdates.dashboard.version = onlineDashVer;
+                        systemUpdates.dashboard.url = doc["dashboard"]["url"].as<String>();
+                        systemUpdates.dashboard.notes = doc["dashboard"]["notes"].as<String>();
+                        DevLog.printf("[UPDATER] Dashboard update found: %s\n", onlineDashVer.c_str());
+                    } else {
+                         systemUpdates.dashboard.available = false;
+                    }
+                    
+                    // Gateway Check
+                    if (doc.containsKey("gateway")) {
+                        systemUpdates.gateway.version = doc["gateway"]["version"].as<String>();
+                        systemUpdates.gateway.url = doc["gateway"]["url"].as<String>();
+                        systemUpdates.gateway.notes = doc["gateway"]["notes"].as<String>();
+                        systemUpdates.gateway.available = true;
+                        DevLog.printf("[UPDATER] Gateway online ver: %s\n", systemUpdates.gateway.version.c_str());
+                    }
+
+                    // Node Check
+                    if (doc.containsKey("nodes")) {
+                        JsonObject nodesObj = doc["nodes"];
+                        systemUpdates.nodes.clear();
+                        
+                        for (JsonPair kv : nodesObj) {
+                            String typeName = kv.key().c_str();
+                            JsonObject nodeData = kv.value().as<JsonObject>();
+                            
+                            UpdateInfo info;
+                            info.version = nodeData["version"].as<String>();
+                            info.url = nodeData["url"].as<String>();
+                            info.notes = nodeData["notes"].as<String>();
+                            info.available = true; 
+                            
+                            systemUpdates.nodes[typeName] = info;
+                            DevLog.printf("[UPDATER] Node %s online ver: %s\n", typeName.c_str(), info.version.c_str());
+                        }
+                    } else if (doc.containsKey("node")) {
+                        UpdateInfo info;
+                        info.version = doc["node"]["version"].as<String>();
+                        info.url = doc["node"]["url"].as<String>();
+                        info.notes = doc["node"]["notes"].as<String>();
+                        info.available = true;
+                        systemUpdates.nodes["DEFAULT"] = info;
+                    }
+                    
+                } else {
+                    DevLog.println("[UPDATER] JSON parse error");
+                    systemUpdates.lastResult = "JSON Parse Error";
+                }
+            } else {
+                DevLog.printf("[UPDATER] HTTP Error: %d\n", httpCode);
+                systemUpdates.lastResult = "HTTP Error: " + String(httpCode);
+            }
+            http.end();
+        } else {
+             DevLog.println("[UPDATER] Unable to connect");
+             systemUpdates.lastResult = "Connection Failed";
+             systemUpdates.lastCheck = millis();
+        }
+        
+        broadcastUpdate(); // Always broadcast result
+        delete client;
+    } else {
+        systemUpdates.lastResult = "Client Alloc Failed";
+        systemUpdates.lastCheck = millis();
+        broadcastUpdate();
+    }
 }
 
 // --- WebSocket & Broadcast Helper ---
@@ -1241,6 +1478,14 @@ void setup() {
         server.on("/reset_ap", HTTP_POST, handleResetToAP);
         
         server.on("/system/update", HTTP_POST, handleSystemUpdate, handleSystemUpdateUpload);
+        server.on("/api/update_from_url", HTTP_POST, handleUpdateFromUrl);
+
+        // --- Manual Update Check Endpoint ---
+        server.on("/api/check_updates", HTTP_POST, []() {
+            DevLog.println("[CMD] Manual Update Check requested via Web UI");
+            checkGithubUpdates(); // Force check
+            server.send(200, "application/json", "{\"status\":\"checked\"}");
+        });
 
         webSocket.begin();
         webSocket.onEvent(webSocketEvent);
@@ -1332,6 +1577,11 @@ void loop() {
     
     if (!configMode && WiFi.status() == WL_CONNECTED) {
         webSocket.loop();
+        
+        // Check GitHub Updates
+        if (millis() - systemUpdates.lastCheck > UPDATE_CHECK_INTERVAL || systemUpdates.lastCheck == 0) {
+            checkGithubUpdates();
+        }
         
         // Handle pending network state saves (Non-blocking)
         handleNetworkSave();

@@ -26,4 +26,20 @@ struct PeerInfo {
     unsigned long lastSeen;
 };
 
+struct UpdateInfo {
+    bool available = false;
+    String version = "";
+    String url = "";
+    String notes = "";
+    bool mandatory = false;
+};
+
+struct SystemUpdates {
+    UpdateInfo dashboard;
+    UpdateInfo gateway;
+    std::map<String, UpdateInfo> nodes;
+    unsigned long lastCheck = 0;
+    String lastResult = "";
+};
+
 #endif
