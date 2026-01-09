@@ -42,10 +42,30 @@ set BIN_DASH="ESP32_Dashboard_Controller\build\esp32.esp32.esp32\ESP32_Dashboard
 set BIN_GW="ESP8266_Gateway_mqtt\build\esp8266.esp8266.nodemcuv2\ESP8266_Gateway_mqtt.ino.bin"
 set BIN_NODE="4_RELAY_CONTROLLER\build\esp8266.esp8266.nodemcuv2\4_RELAY_CONTROLLER.ino.bin"
 
-REM Verifica esistenza
-if not exist %BIN_DASH% ( echo [ERRORE] Manca binario Dashboard & goto :error_generic )
-if not exist %BIN_GW% ( echo [ERRORE] Manca binario Gateway & goto :error_generic )
-if not exist %BIN_NODE% ( echo [ERRORE] Manca binario Nodo & goto :error_generic )
+REM Verifica e Compilazione Automatica
+if not exist %BIN_DASH% (
+    echo [INFO] Binario Dashboard mancante. Avvio compilazione...
+    pushd "ESP32_Dashboard_Controller"
+    arduino-cli compile --fqbn esp32:esp32:esp32 --libraries "..\libraries" --export-binaries .
+    popd
+    if not exist %BIN_DASH% ( echo [ERRORE] Compilazione Dashboard fallita & goto :error_generic )
+)
+
+if not exist %BIN_GW% (
+    echo [INFO] Binario Gateway mancante. Avvio compilazione...
+    pushd "ESP8266_Gateway_mqtt"
+    arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 --libraries "..\libraries" --export-binaries .
+    popd
+    if not exist %BIN_GW% ( echo [ERRORE] Compilazione Gateway fallita & goto :error_generic )
+)
+
+if not exist %BIN_NODE% (
+    echo [INFO] Binario Nodo mancante. Avvio compilazione...
+    pushd "4_RELAY_CONTROLLER"
+    arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 --libraries "..\libraries" --export-binaries .
+    popd
+    if not exist %BIN_NODE% ( echo [ERRORE] Compilazione Nodo fallita & goto :error_generic )
+)
 
 if not exist "bin" mkdir "bin"
 
