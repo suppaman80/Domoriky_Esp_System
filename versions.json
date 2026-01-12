@@ -1,12 +1,12 @@
 {
     "dashboard":  {
-                      "version":  "1.4.40",
+                      "version":  "1.4.42",
                       "url":  "https://raw.githubusercontent.com/suppaman80/Domoriky_Esp_System/master/bin/ESP32_Dashboard_Controller.ino.bin",
                       "mandatory":  false,
                       "notes":  "Initial Release"
                   },
     "gateway":  {
-                    "version":  "1.4.22",
+                    "version":  "1.4.23",
                     "url":  "https://raw.githubusercontent.com/suppaman80/Domoriky_Esp_System/master/bin/ESP8266_Gateway_mqtt.ino.bin",
                     "mandatory":  false,
                     "notes":  "Initial Release"
