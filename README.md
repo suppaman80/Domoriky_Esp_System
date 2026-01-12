@@ -7,14 +7,13 @@ Questo progetto è una soluzione modulare, scalabile e completamente locale per 
 
 Il sistema si basa su un'architettura a tre livelli, progettata per separare le responsabilità, ottimizzare le comunicazioni radio e garantire robustezza.
 
-```mermaid
 graph TD
     User[Utente (Browser/PC/Smartphone)] <-->|HTTP / WebSocket| Dashboard[🖥️ ESP32 Dashboard Controller]
     Dashboard <-->|MQTT (WiFi)| Gateway[📡 ESP8266 Gateway]
     Gateway <-->|ESP-NOW (Proprietario 2.4GHz)| Node1[🔌 Nodo Relè 1]
     Gateway <-->|ESP-NOW| Node2[🔌 Nodo Relè 2]
     Gateway <-->|ESP-NOW| NodeN[🔌 Altri Nodi...]
-```
+
 
 ### 1. 🖥️ Livello Dashboard (Il Cervello)
 - **Componente:** `ESP32_Dashboard_Controller`
