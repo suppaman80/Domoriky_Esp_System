@@ -13,7 +13,7 @@
                 },
     "nodes":  {
                   "4_RELAY_CONTROLLER":  {
-                                             "version":  "1.0.21",
+                                             "version":  "1.0.22",
                                              "url":  "https://raw.githubusercontent.com/suppaman80/Domoriky_Esp_System/master/bin/4_RELAY_CONTROLLER.ino.bin",
                                              "mandatory":  false,
                                              "notes":  "Initial Release"
