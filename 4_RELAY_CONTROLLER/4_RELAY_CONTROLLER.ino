@@ -73,7 +73,7 @@ String getPinOptions(int selected) {
 }
 
 // Configurazione Logica Relè (true = modulo relè attivo basso, comune per ESP8266)
-#define RELAY_ACTIVE_LOW true
+#define RELAY_ACTIVE_LOW false
 
 // --- CONFIGURAZIONE DEFAULT ---
 #define DEFAULT_NODE_ID "NODE_NAME"
@@ -883,6 +883,13 @@ void manageLedFeedback() {
 
 // --- SETUP ---
 void setup() {
+    // Early init to prevent relay glitch on boot
+    // Inizializza immediatamente i pin di default a LOW per evitare attivazioni spurie
+    for(int i=0; i<4; i++) {
+        pinMode(relayPins[i], OUTPUT);
+        digitalWrite(relayPins[i], LOW);
+    }
+
     // Inizializzazione Watchdog Timer (8 secondi)
     ESP.wdtEnable(8000);
     

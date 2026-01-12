@@ -850,30 +850,35 @@ void populateJson(DynamicJsonDocument& doc) {
     // System Updates
     JsonObject updatesObj = doc.createNestedObject("updates");
     
+    // Dashboard Update - Always include for frontend logic
+    JsonObject dashUpd = updatesObj.createNestedObject("dashboard");
+    dashUpd["available"] = systemUpdates.dashboard.available;
+    dashUpd["version"] = systemUpdates.dashboard.version;
+    dashUpd["url"] = systemUpdates.dashboard.url;
+    dashUpd["notes"] = systemUpdates.dashboard.notes;
     if (systemUpdates.dashboard.available) {
-        JsonObject dashUpd = updatesObj.createNestedObject("dashboard");
-        dashUpd["available"] = true;
-        dashUpd["version"] = systemUpdates.dashboard.version;
-        dashUpd["url"] = systemUpdates.dashboard.url;
-        dashUpd["notes"] = systemUpdates.dashboard.notes;
         DevLog.printf("[JSON] Dash Update added: v%s\n", systemUpdates.dashboard.version.c_str());
     }
 
-    if (systemUpdates.gateway.available) {
+    // Gateway Update - Always include if data exists, regardless of 'available' flag
+    if (systemUpdates.gateway.version.length() > 0) {
         JsonObject gwUpd = updatesObj.createNestedObject("gateway");
         gwUpd["version"] = systemUpdates.gateway.version;
         gwUpd["url"] = systemUpdates.gateway.url;
         gwUpd["notes"] = systemUpdates.gateway.notes;
+        gwUpd["available"] = systemUpdates.gateway.available;
         DevLog.printf("[JSON] Gateway Update added: v%s\n", systemUpdates.gateway.version.c_str());
     }
     
     JsonObject nodesUpdObj = updatesObj.createNestedObject("nodes");
     for (auto const& [type, info] : systemUpdates.nodes) {
-        if (info.available) {
+        // Node Update - Always include if data exists
+        if (info.version.length() > 0) {
             JsonObject n = nodesUpdObj.createNestedObject(type);
             n["version"] = info.version;
             n["url"] = info.url;
             n["notes"] = info.notes;
+            n["available"] = info.available;
             DevLog.printf("[JSON] Node Update added for %s: v%s\n", type.c_str(), info.version.c_str());
         }
     }
@@ -887,6 +892,9 @@ void handleApiData() {
     populateJson(doc);
     String response;
     serializeJson(doc, response);
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "-1");
     server.send(200, "application/json", response);
 }
 
@@ -1210,6 +1218,8 @@ void checkGithubUpdates() {
         if (http.begin(*client, url)) {
             http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
             http.setTimeout(20000); // 20s HTTP timeout
+            http.addHeader("Cache-Control", "no-cache");
+            http.addHeader("Pragma", "no-cache");
 
             DevLog.println("[UPDATER] Connecting to GitHub...");
             int httpCode = http.GET();
@@ -1220,24 +1230,29 @@ void checkGithubUpdates() {
             if (httpCode == HTTP_CODE_OK) {
                 String payload = http.getString();
                 DevLog.println("[UPDATER] Versions.json downloaded");
-                // DevLog.println(payload); // Optional: Debug payload
+                DevLog.println(payload); // Debug payload enabled
                 
                 DynamicJsonDocument doc(2048);
                 DeserializationError error = deserializeJson(doc, payload);
                 
                 if (!error) {
                     systemUpdates.lastResult = "Success";
+                    systemUpdates.nodes.clear(); // Clear stale updates
+                    systemUpdates.gateway.available = false; // Reset gateway availability
                     
                     // Dashboard Check
                     String onlineDashVer = doc["dashboard"]["version"].as<String>();
                     DevLog.printf("[UPDATER] Online Dash: %s, Current: %s\n", onlineDashVer.c_str(), FIRMWARE_VERSION);
 
-                    if (compareVersions(onlineDashVer, FIRMWARE_VERSION) > 0) {
+                    // Always populate data
+                    systemUpdates.dashboard.version = onlineDashVer;
+                    systemUpdates.dashboard.url = doc["dashboard"]["url"].as<String>();
+                    systemUpdates.dashboard.notes = doc["dashboard"]["notes"].as<String>();
+
+                    // Allow update if version is greater or equal (for testing/reinstall)
+                    if (compareVersions(onlineDashVer, FIRMWARE_VERSION) >= 0) {
                         systemUpdates.dashboard.available = true;
-                        systemUpdates.dashboard.version = onlineDashVer;
-                        systemUpdates.dashboard.url = doc["dashboard"]["url"].as<String>();
-                        systemUpdates.dashboard.notes = doc["dashboard"]["notes"].as<String>();
-                        DevLog.printf("[UPDATER] Dashboard update found: %s\n", onlineDashVer.c_str());
+                        DevLog.printf("[UPDATER] Dashboard update available: %s\n", onlineDashVer.c_str());
                     } else {
                          systemUpdates.dashboard.available = false;
                     }
@@ -1247,6 +1262,7 @@ void checkGithubUpdates() {
                         systemUpdates.gateway.version = doc["gateway"]["version"].as<String>();
                         systemUpdates.gateway.url = doc["gateway"]["url"].as<String>();
                         systemUpdates.gateway.notes = doc["gateway"]["notes"].as<String>();
+                        // Mark as available so frontend can check versions against connected gateways
                         systemUpdates.gateway.available = true;
                         DevLog.printf("[UPDATER] Gateway online ver: %s\n", systemUpdates.gateway.version.c_str());
                     }
@@ -1254,7 +1270,6 @@ void checkGithubUpdates() {
                     // Node Check
                     if (doc.containsKey("nodes")) {
                         JsonObject nodesObj = doc["nodes"];
-                        systemUpdates.nodes.clear();
                         
                         for (JsonPair kv : nodesObj) {
                             String typeName = kv.key().c_str();

@@ -9,6 +9,9 @@ __pycache__/
 *.bootloader.bin
 *.partitions.bin
 
+# Allow release binaries in bin/ folder
+!bin/*.bin
+
 # Editor specific
 .vscode/
 .idea/

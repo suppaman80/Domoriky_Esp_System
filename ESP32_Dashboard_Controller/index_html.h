@@ -164,7 +164,7 @@ h1 { margin: 0; font-size: 24px; color: var(--dark); }
 <button onclick="refreshDiscovery()" class="btn" style="background: var(--primary); color: white;">🔄 Aggiorna Rete</button>
 </div>
 <div class="toolbar-group">
-<button id="update-notification" onclick="showUpdateModal()" class="btn" style="background: #ffc107; color: black; display: none;">🎁 Update!</button>
+<span id="dashboard-update-container" style="display:none; margin-right: 5px;"></span>
 <button onclick="checkUpdates()" class="btn" style="background: #0dcaf0; color: black;" title="Controlla aggiornamenti online">☁️ Check Upd</button>
 <button class="btn" style="background: #6610f2; color: white;" onclick="document.getElementById('system-firmware').click()" title="Aggiornamento Firmware Dashboard Manuale">🚀 FW Upload</button>
 <button onclick="window.open('/debug', 'DebugWindow', 'width=800,height=600');" class="btn" style="background: #212529; color: white;">🖥️ Console</button>
@@ -480,27 +480,31 @@ function performDashboardAutoUpdate(url, btn) {
 
 function updateUI() {
     // 1. Check Dashboard Update & Inject Button if needed
-    const dashVerElem = document.getElementById('sys-fw');
-    if (dashVerElem && dashboardData.updates && dashboardData.updates.dashboard && dashboardData.updates.dashboard.available) {
-        const onlineVer = dashboardData.updates.dashboard.version;
-        const currentVer = dashboardData.version;
-        const url = dashboardData.updates.dashboard.url;
-        
-        // Remove existing button if any
-        const existingBtn = document.getElementById('dash-auto-update-btn');
-        if (existingBtn) existingBtn.remove();
+    const updateContainer = document.getElementById('dashboard-update-container');
+    if (updateContainer) {
+        // Use shared helper
+        if (hasDashboardUpdate()) {
+            const dashUpd = dashboardData.updates.dashboard;
+            const onlineVer = dashUpd.version;
+            const url = dashUpd.url;
+            
+            // Remove existing button if any
+            const existingBtn = document.getElementById('dash-auto-update-btn');
+            if (existingBtn) existingBtn.remove();
 
-        if (compareVersions(onlineVer, currentVer) > 0) {
             const btn = document.createElement('button');
             btn.id = 'dash-auto-update-btn';
-            btn.className = 'status-badge';
-            btn.style.cssText = "background: #ffc107; color: black; border: 1px solid #d39e00; cursor: pointer; margin-left:10px; animation: pulse 2s infinite; font-size: 14px; padding: 2px 8px;";
-            btn.innerHTML = `⚠️ Update v${onlineVer}`;
+            btn.className = 'btn';
+            btn.style.cssText = "background: #ffc107; color: black; border: 1px solid #d39e00; cursor: pointer; animation: pulse 2s infinite;";
+            btn.innerHTML = `Update v${onlineVer}`;
             btn.title = `Aggiorna Dashboard a v${onlineVer}`;
             btn.onclick = function() { performDashboardAutoUpdate(url, this); };
             
-            // Append next to firmware version
-            dashVerElem.parentNode.appendChild(btn);
+            // Append to toolbar container
+            updateContainer.appendChild(btn);
+            updateContainer.style.display = 'inline-block';
+        } else {
+            updateContainer.style.display = 'none';
         }
     }
 
@@ -513,17 +517,17 @@ let html = '';
 for (const [gwId, gw] of Object.entries(gateways)) {
 
 const isOnline = true;
-let gwUpdateBtn = '';
-if (dashboardData.updates && dashboardData.updates.gateway) {
-    const gwOnlineVer = dashboardData.updates.gateway.version;
-    const gwUrl = dashboardData.updates.gateway.url;
-    if (gw.version && compareVersions(gwOnlineVer, gw.version) > 0) {
+    let gwUpdateBtn = '';
+    
+    // Use shared helper
+    if (hasGatewayUpdate(gw)) {
+        const gwOnlineVer = dashboardData.updates.gateway.version;
+        const gwUrl = dashboardData.updates.gateway.url;
         gwUpdateBtn = `
         <button class="status-badge" style="background: #ffc107; color: black; border: 1px solid #d39e00; cursor: pointer; margin-right:5px; animation: pulse 2s infinite;" onclick="startAutoUpdateGateway('${gwUrl}', '${gw.ip}', this)" title="Aggiorna Automaticamente a v${gwOnlineVer}">
-        ⚠️ Update v${gwOnlineVer}
+        Update v${gwOnlineVer}
         </button>`;
     }
-}
 html += `
 <div class="gateway-card">
 <div class="gateway-header">
@@ -692,26 +696,18 @@ controlsHtml = `<div style="margin-top:10px; font-size:12px; color:#999;">Contro
 
 let autoOtaBtn = "";
 
-if (dashboardData.updates && dashboardData.updates.nodes) {
-    const nodeType = peer.nodeType || "DEFAULT";
-    let updateInfo = dashboardData.updates.nodes[nodeType];
-    
-    // Debug Update Logic
-    // console.log(`[DEBUG] Node: ${peer.nodeId}, Type: ${nodeType}, FW: ${peer.firmwareVersion}`);
-    
-    if (!updateInfo && nodeType === "UNKNOWN") updateInfo = dashboardData.updates.nodes["DEFAULT"];
-    
-    if (updateInfo && updateInfo.version) {
-        if (compareVersions(updateInfo.version, peer.firmwareVersion) > 0) {
-            console.log(`[DEBUG] UPDATE AVAILABLE! ${updateInfo.version} > ${peer.firmwareVersion}`);
-            
-            autoOtaBtn = `
-            <button class="status-badge" style="background: #ffc107; color: black; border: 1px solid #d39e00; cursor: pointer; margin-right:5px; animation: pulse 2s infinite; font-size: 12px; padding: 4px 8px;" 
-            onclick="startAutoUpdateNode('${peer.nodeId}', '${peer.gatewayId}', '${updateInfo.url}', this)" 
-            title="Aggiorna Automaticamente a v${updateInfo.version}">⚠️ Update v${updateInfo.version}</button>`;
-        }
+if (hasNodeUpdate(peer)) {
+        const nodeType = peer.nodeType || "DEFAULT";
+        let updateInfo = dashboardData.updates.nodes[nodeType];
+        if (!updateInfo && nodeType === "UNKNOWN") updateInfo = dashboardData.updates.nodes["DEFAULT"];
+        
+        console.log(`[DEBUG] UPDATE AVAILABLE! ${updateInfo.version} > ${peer.firmwareVersion}`);
+        
+        autoOtaBtn = `
+        <button class="status-badge" style="background: #ffc107; color: black; border: 1px solid #d39e00; cursor: pointer; margin-right:5px; animation: pulse 2s infinite; font-size: 12px; padding: 4px 8px;" 
+        onclick="startAutoUpdateNode('${peer.nodeId}', '${peer.gatewayId}', '${updateInfo.url}', this)" 
+        title="Aggiorna Automaticamente a v${updateInfo.version}">Update v${updateInfo.version}</button>`;
     }
-}
 
 controlsHtml += `
 <div style="margin-top: 10px; border-top: 1px solid #ddd; padding-top: 8px; display: flex; justify-content: flex-end; gap: 5px; align-items: center;">
@@ -753,6 +749,34 @@ function compareVersions(v1, v2) {
     }
     return 0;
 }
+
+// --- Shared Update Logic ---
+function hasDashboardUpdate() {
+    // Trust backend 'available' flag (set by checkGithubUpdates)
+    if (dashboardData.updates && dashboardData.updates.dashboard) {
+        return dashboardData.updates.dashboard.available === true;
+    }
+    return false;
+}
+
+function hasGatewayUpdate(gw) {
+    if (!dashboardData.updates || !dashboardData.updates.gateway) return false;
+    const onlineVer = dashboardData.updates.gateway.version;
+    // For gateways, we still compare versions frontend-side as backend sets global availability
+    return (gw.version && onlineVer && compareVersions(onlineVer, gw.version) > 0);
+}
+
+function hasNodeUpdate(peer) {
+    if (!dashboardData.updates || !dashboardData.updates.nodes) return false;
+    const type = peer.nodeType || "DEFAULT";
+    let info = dashboardData.updates.nodes[type];
+    if (!info && type === "UNKNOWN") info = dashboardData.updates.nodes["DEFAULT"];
+    
+    if (info && info.version) {
+        return compareVersions(info.version, peer.firmwareVersion) > 0;
+    }
+    return false;
+}
 function renderData(data) {
     gateways = data.gateways || {};
     peers = data.peers || {};
@@ -762,24 +786,9 @@ function renderData(data) {
         dashboardData.updates = data.updates;
     }
 
-    if (data.updates && data.updates.dashboard && data.updates.dashboard.available) {
-const onlineVer = data.updates.dashboard.version;
-const currentVer = dashboardData.version;
-if (compareVersions(onlineVer, currentVer) > 0) {
-const btn = document.getElementById('update-notification');
-if(btn) {
-btn.style.display = 'inline-block';
-btn.title = "Nuova versione v" + onlineVer + " disponibile!";
-}
-window.latestUpdate = data.updates.dashboard;
-} else {
-const btn = document.getElementById('update-notification');
-if(btn) btn.style.display = 'none';
-}
-}
-if (typeof checkOtaMonitors === 'function') {
-checkOtaMonitors();
-}
+    if (typeof checkOtaMonitors === 'function') {
+        checkOtaMonitors();
+    }
 if (data.dashboard) {
 document.getElementById('dashboard-version').innerText =
 `v${data.dashboard.version} (Build: ${data.dashboard.buildDate})`;
@@ -815,12 +824,12 @@ document.getElementById('sys-mac').innerText = data.dashboard.mac || 'N/A';
 updateUI();
 }
 function fetchData() {
-fetch('/api/data')
-.then(response => response.json())
-.then(data => {
-renderData(data);
-})
-.catch(err => console.error('Error fetching data:', err));
+    fetch('/api/data?t=' + Date.now())
+        .then(response => response.json())
+        .then(data => {
+            renderData(data);
+        })
+        .catch(err => console.error('Error fetching data:', err));
 }
 function sendCommand(nodeId, topic, command) {
 return fetch('/api/command', {
@@ -1190,29 +1199,26 @@ showToast("Errore Controllo: " + lastResult, "error");
 } else {
 let found = false;
 let details = [];
-if (dashboardData.updates.dashboard && dashboardData.updates.dashboard.available) {
-if (compareVersions(dashboardData.updates.dashboard.version, dashboardData.version) > 0) {
+
+// Check Dashboard
+if (hasDashboardUpdate()) {
 found = true;
 details.push("Dashboard");
 }
-}
-if (dashboardData.updates.gateway) {
-const gwOnline = dashboardData.updates.gateway.version;
+
+// Check Gateways
 for (const gwId in gateways) {
-if (gateways[gwId].version && compareVersions(gwOnline, gateways[gwId].version) > 0) {
+if (hasGatewayUpdate(gateways[gwId])) {
 found = true;
 if (!details.includes("Gateway")) details.push("Gateway");
 }
 }
-}
-if (dashboardData.updates.nodes) {
+
+// Check Nodes
 for (const nodeId in peers) {
-const peer = peers[nodeId];
-const updateInfo = dashboardData.updates.nodes[peer.nodeType] || dashboardData.updates.nodes["DEFAULT"];
-if (updateInfo && updateInfo.version && compareVersions(updateInfo.version, peer.firmwareVersion) > 0) {
+if (hasNodeUpdate(peers[nodeId])) {
 found = true;
 if (!details.includes("Nodi")) details.push("Nodi");
-}
 }
 }
 if (found) {
