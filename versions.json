@@ -1,6 +1,6 @@
 {
     "dashboard":  {
-                      "version":  "1.4.34",
+                      "version":  "1.4.36",
                       "url":  "https://raw.githubusercontent.com/suppaman80/Domoriky_Esp_System/master/bin/ESP32_Dashboard_Controller.ino.bin",
                       "mandatory":  false,
                       "notes":  "Initial Release"
