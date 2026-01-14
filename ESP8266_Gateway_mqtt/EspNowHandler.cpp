@@ -195,13 +195,7 @@ void processMessageQueue() {
             if (strcmp(receivedData.type, "FEEDBACK") == 0 && strcmp(receivedData.command, "OTA_UPDATE") == 0) {
                  DevLog.printf("OTA FEEDBACK Received: Node=%s, Status=%s, TargetGateway=%s\n", receivedData.node, receivedData.status, receivedData.gateway_id);
                  
-                 // Update global status regardless of nodeId match if we are in a triggered state
-                 // This ensures we catch the feedback even if there are case/format discrepancies
-                 if (globalOtaStatus.status == "TRIGGERED" || globalOtaStatus.status == "OTA_STARTING" || globalOtaStatus.status == "OTA_PROGRESS") {
-                      globalOtaStatus.status = receivedData.status;
-                      globalOtaStatus.lastMessage = "Node Response (" + String(receivedData.node) + "): " + String(receivedData.status);
-                      globalOtaStatus.timestamp = millis();
-                 }
+                 // Global OTA status tracking removed (Instrumentation removal)
             }
     
             // Handle REGISTER command - Relaxed check
@@ -223,16 +217,7 @@ void processMessageQueue() {
     
                     DevLog.printf("📝 REGISTRATION parsed - Type: %s, Version: %s\n", typeStr.c_str(), versionStr.c_str());
     
-                    // OTA COMPLETION CHECK
-                    // Check if this registration completes a pending OTA for this node
-                    if ((globalOtaStatus.status == "TRIGGERED" || globalOtaStatus.status == "OTA_STARTING" || globalOtaStatus.status == "OTA_PROGRESS") && 
-                        String(receivedData.node) == globalOtaStatus.nodeId) {
-                        
-                        globalOtaStatus.status = "SUCCESS";
-                        globalOtaStatus.lastMessage = "Aggiornamento completato! Nuova Versione: " + versionStr;
-                        globalOtaStatus.timestamp = millis();
-                        DevLog.println("✅ OTA SUCCESS confirmed via REGISTRATION");
-                    }
+                    // OTA COMPLETION CHECK removed (Instrumentation removal)
     
                     // Check if node is already registered with same type
                     bool alreadyRegistered = false;

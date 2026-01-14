@@ -20,28 +20,8 @@ extern ESP8266WebServer configServer;
 extern DNSServer dnsServer;
 extern DomoticaEspNow espNow;
 
-// Global flags
-extern bool otaRunning;
-extern bool networkDiscoveryActive;
-extern unsigned long networkDiscoveryStartTime;
-extern bool pingNetworkActive;
-extern unsigned long pingNetworkStartTime;
-extern int pingResponseCount;
-extern uint8_t pingedNodesMac[MAX_PEERS][6];
-extern bool pingResponseReceived[MAX_PEERS];
-
 extern const char* BUILD_DATE;
 extern const char* BUILD_TIME;
-
-// Global OTA Status Tracker
-struct OtaStatus {
-    String nodeId;
-    String status; // "IDLE", "TRIGGERED", "STARTING", "PROGRESS", "SUCCESS", "FAILED"
-    unsigned long timestamp;
-    String lastMessage;
-    int progress;
-};
-extern OtaStatus globalOtaStatus;
 
 // Dashboard Discovery
 extern String discoveredDashboardIP;
@@ -106,28 +86,14 @@ void setupWebRoutes(); // Helper to register all routes
 void handleRoot();
 void handleSave();
 void handleSettings();
-void handleNodes();
-void handleOtaManager();
-void handleGatewayOTA();
 void handleNotFound();
 
 // Action Handlers
 void handleResetAp();
 void handleFactoryReset();
 void handleReboot();
-void handleDeleteNode();
-void handleTriggerOta();
-void handleGatewayUpdate();
 
 // API Handlers
-void handleApiNodesList();
-void handleApiPingNode();
-void handleApiNodeStatus();
-void handleApiNodeRestart();
-void handleApiNodeReset();
-void handleNetworkDiscovery();
-void handlePingNetwork();
-void handleApiOtaStatus();
 void handleApiDashboardInfo(); // Aggiunto prototipo
 
 // Helpers

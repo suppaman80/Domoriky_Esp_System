@@ -364,6 +364,16 @@ function uploadGatewayFirmware(ip, fileOrInput, attempt = 1, btn = null, origina
     if (fileOrInput instanceof HTMLElement) { // Input element
         if (fileOrInput.files.length === 0) return;
         file = fileOrInput.files[0];
+        
+        // --- SAFETY CHECK ---
+        const fileName = file.name.toLowerCase();
+        if (!fileName.includes("gateway") && !fileName.includes("esp8266")) {
+             alert("⛔ BLOCCO SICUREZZA ⛔\n\nIl file selezionato NON sembra un firmware per il Gateway.\nControlla che il nome del file contenga 'Gateway' o 'ESP8266'.\n\nOperazione Annullata.");
+             fileOrInput.value = '';
+             return;
+        }
+        // --------------------
+
         if (attempt === 1 && !confirm(`Aggiornare Gateway (${ip}) con:\n${file.name}?`)) {
             fileOrInput.value = '';
             return;
@@ -908,10 +918,20 @@ btn.disabled = false;
 });
 }
 function uploadSystemFirmware() {
-const fileInput = document.getElementById('system-firmware');
-const file = fileInput.files[0];
-if (!file) return;
-if (!confirm("ATTENZIONE: Stai per aggiornare il firmware della DASHBOARD. Il dispositivo si riavvierà. Continuare?")) return;
+    const fileInput = document.getElementById('system-firmware');
+    const file = fileInput.files[0];
+    if (!file) return;
+
+    // --- SAFETY CHECK ---
+    const fileName = file.name.toLowerCase();
+    if (!fileName.includes("dashboard") && !fileName.includes("esp32")) {
+         alert("⛔ BLOCCO SICUREZZA ⛔\n\nIl file selezionato NON sembra un firmware per la Dashboard (ESP32).\nControlla che il nome del file contenga 'Dashboard' o 'ESP32'.\n\nOperazione Annullata.");
+         fileInput.value = '';
+         return;
+    }
+    // --------------------
+
+    if (!confirm("ATTENZIONE: Stai per aggiornare il firmware della DASHBOARD. Il dispositivo si riavvierà. Continuare?")) return;
 const formData = new FormData();
 formData.append("file", file);
 const btn = fileInput.nextElementSibling;
@@ -956,6 +976,66 @@ function handleNodeOtaUpload() {
     const fileInput = document.getElementById('node-ota-file');
     const file = fileInput.files[0];
     if (!file) return;
+
+    // --- SAFETY CHECK ---
+    const fileName = file.name.toLowerCase();
+    const peer = Object.values(peers).find(p => p.nodeId === otaTargetNode);
+    const nodeType = peer ? (peer.nodeType || "").toLowerCase() : "";
+    
+    // Check for obvious mismatches
+    const isGatewayFile = fileName.includes("gateway") || fileName.includes("esp8266");
+    const isDashboardFile = fileName.includes("dashboard") || fileName.includes("esp32");
+    
+    if (isGatewayFile) {
+        alert("⛔ BLOCCO SICUREZZA ⛔\n\nStai tentando di caricare un firmware GATEWAY su un NODO!\n\nOperazione Annullata.");
+        fileInput.value = "";
+        return;
+    }
+    
+    if (isDashboardFile) {
+        alert("⛔ BLOCCO SICUREZZA ⛔\n\nStai tentando di caricare un firmware DASHBOARD su un NODO!\n\nOperazione Annullata.");
+        fileInput.value = "";
+        return;
+    }
+    
+    // --- Node Type Verification ---
+    if (nodeType && nodeType.length > 2) {
+        const nType = nodeType.toLowerCase();
+        const fName = fileName.toLowerCase();
+        
+        // Create variations to check: 
+        // 1. "4_relay_controller" (original)
+        // 2. "4-relay-controller" (dashes)
+        // 3. "4relaycontroller" (compact)
+        const typeVariations = [
+            nType,
+            nType.replace(/_/g, '-'),
+            nType.replace(/[_-]/g, '')
+        ];
+        
+        const fileCompact = fName.replace(/[_-]/g, '');
+        
+        let typeMatch = false;
+        for (let v of typeVariations) {
+            if (fName.includes(v) || fileCompact.includes(v)) {
+                typeMatch = true;
+                break;
+            }
+        }
+
+        if (!typeMatch) {
+             const msg = "⚠️ ATTENZIONE POSSIBILE ERRORE ⚠️\n\n" +
+                         "Il Nodo destinazione è di tipo: '" + nodeType + "'\n" +
+                         "Ma il file selezionato NON sembra contenere questo nome.\n\n" +
+                         "File: " + file.name + "\n\n" +
+                         "Sei sicuro di voler procedere?";
+             if (!confirm(msg)) {
+                fileInput.value = "";
+                return;
+             }
+        }
+    }
+    // ------------------------------
 
     if (!confirm("Avviare OTA per il nodo " + otaTargetNode + "?\nIl firmware verrà caricato sulla Dashboard e il nodo lo scaricherà direttamente.")) {
         fileInput.value = "";

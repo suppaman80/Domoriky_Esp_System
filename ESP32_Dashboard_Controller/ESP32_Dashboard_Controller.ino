@@ -1249,8 +1249,8 @@ void checkGithubUpdates() {
                     systemUpdates.dashboard.url = doc["dashboard"]["url"].as<String>();
                     systemUpdates.dashboard.notes = doc["dashboard"]["notes"].as<String>();
 
-                    // Allow update if version is greater or equal (for testing/reinstall)
-                    if (compareVersions(onlineDashVer, FIRMWARE_VERSION) >= 0) {
+                    // Only allow update if online version is strictly greater
+                    if (compareVersions(onlineDashVer, FIRMWARE_VERSION) > 0) {
                         systemUpdates.dashboard.available = true;
                         DevLog.printf("[UPDATER] Dashboard update available: %s\n", onlineDashVer.c_str());
                     } else {
