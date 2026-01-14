@@ -84,6 +84,55 @@ void setupWebRoutes() {
         configServer.sendHeader("Access-Control-Max-Age", "86400"); // Cache preflight per 24h
         configServer.send(200); 
     };
+
+    // API Command (Direct Gateway Control)
+    configServer.on("/api/command", HTTP_OPTIONS, sendCors);
+    configServer.on("/api/command", HTTP_POST, []() {
+        configServer.sendHeader("Access-Control-Allow-Origin", "*");
+        
+        if (!configServer.hasArg("plain")) {
+            configServer.send(400, "application/json", "{\"error\":\"Body missing\"}");
+            return;
+        }
+        
+        DynamicJsonDocument doc(1024);
+        DeserializationError error = deserializeJson(doc, configServer.arg("plain"));
+        
+        if (error) {
+            configServer.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+            return;
+        }
+        
+        String command = doc["command"] | "";
+        
+        if (command == "NODE_FACTORY_RESET") {
+             if (!doc.containsKey("nodeId")) {
+                 configServer.send(400, "application/json", "{\"error\":\"Missing nodeId\"}");
+                 return;
+             }
+             String targetNodeId = doc["nodeId"];
+             
+             bool nodeFound = false;
+             for (int i = 0; i < peerCount; i++) {
+                 if (String(peerList[i].nodeId) == targetNodeId) {
+                     espNow.send(peerList[i].mac, peerList[i].nodeId, "CONTROL", "FACTORY_RESET", "", "COMMAND", gateway_id);
+                     DevLog.printf("Factory reset sent to node %s via HTTP API\n", targetNodeId.c_str());
+                     nodeFound = true;
+                     break;
+                 }
+             }
+             
+             if (nodeFound) {
+                 configServer.send(200, "application/json", "{\"status\":\"ok\", \"message\":\"Factory Reset Sent\"}");
+             } else {
+                 configServer.send(404, "application/json", "{\"error\":\"Node not found\"}");
+             }
+             return;
+        }
+        
+        configServer.send(400, "application/json", "{\"error\":\"Unknown command\"}");
+    });
+
     configServer.on("/trigger_ota", HTTP_OPTIONS, sendCors);
     configServer.on("/trigger_ota", HTTP_POST, []() {
         configServer.sendHeader("Access-Control-Allow-Origin", "*");

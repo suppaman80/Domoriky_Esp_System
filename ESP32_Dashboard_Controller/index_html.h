@@ -616,15 +616,47 @@ gatewayId: gatewayId
 if (command === 'REMOVE_PEER') {
 payload.mac = mac;
 }
-promise = fetch('/api/command', {
-method: 'POST',
-headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify(payload)
-})
-.then(response => response.json());
+
+// DIRECT GATEWAY COMMAND (Bypass Dashboard/MQTT)
+if (command === 'NODE_FACTORY_RESET' && gateways[gatewayId] && gateways[gatewayId].ip) {
+    const fallbackToDashboard = (reason) => {
+        console.warn("Direct Gateway command failed (" + reason + "), falling back to Dashboard API...");
+        return fetch('/api/command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(response => response.json());
+    };
+
+    promise = fetch('http://' + gateways[gatewayId].ip + '/api/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(response => {
+        if (!response.ok) throw new Error("Gateway responded with " + response.status);
+        return response.json();
+    })
+    .then(data => {
+        if (data.error) throw new Error(data.error);
+        return data;
+    })
+    .catch(err => {
+        return fallbackToDashboard(err.message);
+    });
+} else {
+    promise = fetch('/api/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(response => response.json());
+}
 }
 promise
 .then(data => {
+if (data.error) throw new Error(data.error);
 console.log('Admin Command Sent:', data);
 restoreBtn(true);
 if (command === 'REMOVE_PEER') {

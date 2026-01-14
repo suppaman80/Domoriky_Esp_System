@@ -213,6 +213,47 @@ bool loadGatewayMac() {
     return true;
 }
 
+void performFactoryReset() {
+    Serial.println("⚠️ ESECUZIONE RESET TOTALE (AP MODE)...");
+    
+    // Assicura che LittleFS sia in uno stato pulito
+    LittleFS.end();
+    
+    if (LittleFS.begin()) {
+        Serial.println("📂 LittleFS montato correttamente");
+        
+        // Cancella config.json (WiFi, NodeID, ecc)
+        if (LittleFS.exists("/config.json")) {
+            if (LittleFS.remove("/config.json")) {
+                Serial.println("✅ Configurazione WiFi/Nodo cancellata (/config.json)");
+            } else {
+                Serial.println("❌ Errore rimozione /config.json");
+            }
+        } else {
+            Serial.println("ℹ️ /config.json non trovato (già cancellato?)");
+        }
+        
+        // Cancella gateway_mac.dat
+        if (LittleFS.exists("/gateway_mac.dat")) {
+            if (LittleFS.remove("/gateway_mac.dat")) {
+                Serial.println("✅ MAC gateway cancellato (/gateway_mac.dat)");
+            } else {
+                Serial.println("❌ Errore rimozione /gateway_mac.dat");
+            }
+        } else {
+            Serial.println("ℹ️ /gateway_mac.dat non trovato");
+        }
+        
+        LittleFS.end();
+    } else {
+         Serial.println("❌ Errore accesso LittleFS - Impossibile cancellare file!");
+    }
+    
+    Serial.println("🔄 Riavvio sistema in modalità AP tra 1 secondo...");
+    delay(1000);
+    ESP.restart();
+}
+
 bool saveGatewayMac() {
     if (!LittleFS.begin()) {
         Serial.println("Errore inizializzazione LittleFS per salvataggio MAC");
@@ -674,28 +715,22 @@ void handleControlCommand(uint8_t* senderMac, struct_message* msg) {
     }
     // Comando FACTORY_RESET - resetta la configurazione e riavvia in modalità AP
     else if (strcmp(msg->topic, "CONTROL") == 0 && strcmp(msg->command, "FACTORY_RESET") == 0) {
-        response = "FACTORY_RESET";
+        response = "RESETTING";
         commandExecuted = true;
-
-        // Invia comando di REMOVE_PEER al Gateway prima di cancellare tutto
-        // Questo rimuove immediatamente il nodo dalla dashboard e dal gateway
+        
+        Serial.println("⚠️ COMANDO FACTORY_RESET RICEVUTO VIA ESP-NOW!");
+        
+        // Invia conferma ricezione (ACK)
         if (gatewayFound) {
-             // Send: Node, Topic, Command, Status, Type, GatewayID
-             espNow.send(gatewayMac, nodeId.c_str(), "SYSTEM", "REMOVE_PEER", "LEAVING", "STATUS", targetGatewayId.c_str());
-             delay(200); // Attesa tecnica per assicurare l'invio fisico del pacchetto
+            espNow.send(gatewayMac, nodeId.c_str(), "CONTROL", "FACTORY_RESET", "RESETTING", "FEEDBACK", targetGatewayId.c_str());
         }
         
-        // Resetta la configurazione LittleFS
-        if (LittleFS.begin()) {
-            if (LittleFS.exists("/config.json")) {
-                LittleFS.remove("/config.json");
-            }
-            deleteGatewayMac(); // Cancella anche il MAC address salvato
-        }
-        
-        // Usa un delay molto breve e poi gestisci il riavvio nel loop
+        // Schedule factory reset - Il lavoro sporco lo fa il loop
         factoryResetPending = true;
-        restartTime = millis() + 200; // Riavvio dopo 200ms
+        restartTime = millis() + 1000;
+        
+        // MANTENERE IL COMANDO PER DEBUG
+        performFactoryReset();
     }
     // Comando OTA_UPDATE - avvia aggiornamento firmware
     else if (strcmp(msg->topic, "CONTROL") == 0 && strcmp(msg->command, "OTA_UPDATE") == 0) {
@@ -1211,7 +1246,9 @@ void loop() {
         
         // Gestione reset di fabbrica pendente
         if (factoryResetPending && currentTime >= restartTime) {
-            safeRestart("Reset di fabbrica completato");
+            // Il reset è già stato avviato da performFactoryReset() nella gestione del comando
+            // Ma per sicurezza se siamo qui significa che il restart non è ancora avvenuto
+            performFactoryReset();
         }
         
         // Gestione OTA pendente
@@ -1238,26 +1275,8 @@ void loop() {
                 } else {
                     Serial.println("Gateway non trovato");
                 }
-            } else if (command == "resetmac") {
-                Serial.println("🗑️ Cancellazione MAC gateway da LittleFS...");
-                
-                // Cancella il MAC salvato
-                if (deleteGatewayMac()) {
-                    Serial.println("✅ MAC gateway cancellato da LittleFS");
-                } else {
-                    Serial.println("⚠️ Errore durante la cancellazione del MAC");
-                }
-                
-                // Resetta lo stato del gateway
-                gatewayFound = false;
-                gatewayConnectionLost = false;
-                waitingForDiscoveryResponse = false;
-                memset(gatewayMac, 0, 6);
-                lastGatewayMessage = 0;
-                
-                Serial.println("🔄 Connessione gateway resettata");
-                Serial.println("💡 Il prossimo riavvio eseguirà un nuovo discovery");
-                Serial.println("   (usa comando 'restart' per riavviare immediatamente)");
+            } else if (command == "factoryreset") {
+                performFactoryReset();
             } else if (command == "restart") {
                 Serial.println("🔄 Riavvio richiesto via seriale...");
                 restartPending = true;
@@ -1266,7 +1285,7 @@ void loop() {
                 Serial.println("\n=== COMANDI SERIALI DISPONIBILI ===");
                 Serial.println("status    - Mostra stato completo del sistema");
                 Serial.println("mac       - Mostra MAC address del gateway salvato");
-                Serial.println("resetmac  - Cancella MAC gateway da LittleFS e resetta connessione");
+                Serial.println("factoryreset - Reset totale (cancella WiFi/Config) e riavvia in AP");
                 Serial.println("restart   - Riavvia il modulo");
                 Serial.println("help      - Mostra questo elenco comandi");
                 Serial.println("=====================================");

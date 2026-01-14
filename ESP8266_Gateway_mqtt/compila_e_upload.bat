@@ -27,7 +27,7 @@ if %errorlevel% neq 0 (
 
 echo.
 echo 📤 Fase 2: Upload...
-arduino-cli upload -p COM3 --fqbn esp8266:esp8266:nodemcuv2 --upload-property upload.speed=921600 ESP8266_Gateway_mqtt.ino
+arduino-cli upload -p COM4 --fqbn esp8266:esp8266:nodemcuv2 --upload-property upload.speed=921600 ESP8266_Gateway_mqtt.ino
 
 if %errorlevel% neq 0 (
     echo ❌ Errore durante l'upload!
