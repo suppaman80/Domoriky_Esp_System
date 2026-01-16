@@ -42,7 +42,7 @@ String macToString(const uint8_t* mac) {
     return String(macStr);
 }
 
-void savePeer(const uint8_t* mac_addr, const char* nodeId, const char* nodeType, const char* firmwareVersion) {
+void savePeer(const uint8_t* mac_addr, const char* nodeId, const char* nodeType, const char* firmwareVersion, bool forceDiscovery) {
     bool isNewPeer = true;
     int peerIndex = 0;
     
@@ -93,17 +93,22 @@ void savePeer(const uint8_t* mac_addr, const char* nodeId, const char* nodeType,
     peerList[peerIndex].lastSeen = millis();
     
     // Salva su file se è nuovo o se sono cambiati dati importanti
-    if (isNewPeer || dataChanged) {
-        savePeersToLittleFS();
+    if (isNewPeer || dataChanged || forceDiscovery) {
+        if (isNewPeer || dataChanged) {
+            savePeersToLittleFS();
+        }
         
         // Invia aggiornamento MQTT
         if (mqttConnected) {
             if (isNewPeer) {
                 publishPeerStatus(peerIndex, "NODE_NEW");
-            } else {
+            } else if (dataChanged) {
                 publishPeerStatus(peerIndex, "NODE_UPDATE");
+            } else {
+                 publishPeerStatus(peerIndex, "NODE_REFRESH");
             }
             HaDiscovery::publishDiscovery(mqttClient, peerList[peerIndex], mqtt_topic_prefix);
+            HaDiscovery::publishDashboardConfig(mqttClient, peerList[peerIndex], mqtt_topic_prefix);
         }
     }
 }

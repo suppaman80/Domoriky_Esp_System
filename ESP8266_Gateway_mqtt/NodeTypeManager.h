@@ -30,6 +30,9 @@ public:
         if (!LittleFS.exists(NODETYPES_FILE)) {
             DevLog.println("nodetypes.json not found, creating default...");
             createDefaultConfig();
+        } else {
+            // Controlla se mancano definizioni chiave e aggiorna
+            checkAndUpdateConfig();
         }
         
         return loadConfig();
@@ -128,7 +131,65 @@ private:
     static void createDefaultConfig() {
         DynamicJsonDocument doc(2048);
 
-        // --- 4_RELAY_CONTROLLER ---
+        addDefaultTypes(doc);
+
+        File file = LittleFS.open(NODETYPES_FILE, "w");
+        if (file) {
+            serializeJsonPretty(doc, file);
+            file.close();
+            DevLog.println("Default nodetypes.json created");
+        } else {
+            DevLog.println("Failed to create nodetypes.json");
+        }
+    }
+
+    static void checkAndUpdateConfig() {
+        File file = LittleFS.open(NODETYPES_FILE, "r");
+        if (!file) return;
+
+        DynamicJsonDocument doc(2048);
+        DeserializationError error = deserializeJson(doc, file);
+        file.close();
+
+        if (error) {
+            DevLog.println("Invalid nodetypes.json, recreating...");
+            createDefaultConfig();
+            return;
+        }
+
+        bool changed = false;
+        
+        // Verifica se mancano i tipi standard
+        if (!doc.containsKey("4_RELAY_CONTROLLER")) {
+            addDefault4Relay(doc);
+            changed = true;
+        }
+        if (!doc.containsKey("2_RELAY_CONTROLLER")) {
+            addDefault2Relay(doc);
+            changed = true;
+        }
+        if (!doc.containsKey("SHUTTER_CONTROLLER")) {
+            addDefaultShutter(doc);
+            changed = true;
+        }
+
+        if (changed) {
+            File outFile = LittleFS.open(NODETYPES_FILE, "w");
+            if (outFile) {
+                serializeJsonPretty(doc, outFile);
+                outFile.close();
+                DevLog.println("nodetypes.json updated with missing keys");
+            }
+        }
+    }
+
+    static void addDefaultTypes(DynamicJsonDocument& doc) {
+        addDefault4Relay(doc);
+        addDefault2Relay(doc);
+        addDefaultShutter(doc);
+    }
+
+    static void addDefault4Relay(DynamicJsonDocument& doc) {
         JsonObject relay4 = doc.createNestedObject("4_RELAY_CONTROLLER");
         relay4["description"] = "Standard 4-Channel Relay";
         JsonArray r4Entities = relay4.createNestedArray("entities");
@@ -143,8 +204,9 @@ private:
             e["icon"] = "mdi:power-socket-eu";
             e["idx"] = i;
         }
+    }
 
-        // --- 2_RELAY_CONTROLLER ---
+    static void addDefault2Relay(DynamicJsonDocument& doc) {
         JsonObject relay2 = doc.createNestedObject("2_RELAY_CONTROLLER");
         relay2["description"] = "2-Channel Relay";
         JsonArray r2Entities = relay2.createNestedArray("entities");
@@ -159,8 +221,9 @@ private:
             e["icon"] = "mdi:lightbulb";
             e["idx"] = i;
         }
+    }
 
-        // --- SHUTTER_CONTROLLER ---
+    static void addDefaultShutter(DynamicJsonDocument& doc) {
         JsonObject shutter = doc.createNestedObject("SHUTTER_CONTROLLER");
         shutter["description"] = "Window Shutter Controller";
         JsonArray sEntities = shutter.createNestedArray("entities");
@@ -172,15 +235,6 @@ private:
         e["device_class"] = "shutter";
         e["icon"] = "mdi:window-shutter";
         e["idx"] = 0;
-
-        File file = LittleFS.open(NODETYPES_FILE, "w");
-        if (file) {
-            serializeJsonPretty(doc, file);
-            file.close();
-            DevLog.println("Default nodetypes.json created");
-        } else {
-            DevLog.println("Failed to create nodetypes.json");
-        }
     }
 };
 

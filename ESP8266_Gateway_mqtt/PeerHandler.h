@@ -32,7 +32,7 @@ extern int listPeersIndex;
 extern unsigned long lastPeerListSendTime;
 
 // Function prototypes
-void savePeer(const uint8_t* mac_addr, const char* nodeId = "", const char* nodeType = "", const char* firmwareVersion = "");
+void savePeer(const uint8_t* mac_addr, const char* nodeId = "", const char* nodeType = "", const char* firmwareVersion = "", bool forceDiscovery = false);
 void loadPeersFromLittleFS();
 void savePeersToLittleFS();
 void printPeersList();

@@ -45,213 +45,166 @@ String generateNetworksList();
 
 // --- Config Server Handlers ---
 
+String escapeAttr(const char* val) {
+    if (val == nullptr) return "";
+    String s = String(val);
+    s.replace("\"", "&quot;");
+    return s;
+}
+
 void handleConfigRoot() {
+    DevLog.println("[WEB] handleConfigRoot v4.0 START");
+    
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     server.send(200, "text/html", "");
+
+    // --- 1. HEADER & CSS (BEAUTIFUL UI) ---
+    String chunk = F("<!DOCTYPE html><html lang='it'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'>");
+    chunk += F("<title>Configurazione Dashboard</title>");
+    chunk += F("<style>");
+    chunk += F("body{font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background-color:#f0f2f5;margin:0;padding:20px;color:#333}");
+    chunk += F(".container{background:white;max-width:480px;margin:0 auto;padding:30px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.08)}");
+    chunk += F("h2{color:#1a73e8;text-align:center;margin-bottom:25px;font-weight:600}");
+    chunk += F(".section-title{font-size:14px;font-weight:700;color:#5f6368;text-transform:uppercase;margin:25px 0 10px;border-bottom:2px solid #e8eaed;padding-bottom:5px;letter-spacing:0.5px}");
+    chunk += F(".input-group{margin-bottom:15px;position:relative}");
+    chunk += F("label{display:block;margin-bottom:6px;font-weight:500;color:#3c4043;font-size:14px}");
+    chunk += F("input[type=text],input[type=password],input[type=number],select{width:100%;padding:12px;border:1px solid #dadce0;border-radius:6px;font-size:15px;transition:border-color 0.2s;box-sizing:border-box}");
+    chunk += F("input:focus{border-color:#1a73e8;outline:none;box-shadow:0 0 0 2px rgba(26,115,232,0.2)}");
+    chunk += F(".btn{display:inline-block;width:100%;padding:14px;background-color:#1a73e8;color:white;border:none;border-radius:6px;font-size:16px;font-weight:600;cursor:pointer;transition:background-color 0.2s;text-align:center;text-decoration:none}");
+    chunk += F(".btn:hover{background-color:#1557b0}");
+    chunk += F(".btn-scan{background-color:#34a853;margin-bottom:10px}");
+    chunk += F(".btn-scan:hover{background-color:#2d8e47}");
+    chunk += F(".radio-group{display:flex;gap:15px;margin-bottom:15px;background:#f8f9fa;padding:10px;border-radius:6px}");
+    chunk += F(".radio-group label{margin:0;cursor:pointer;display:flex;align-items:center;font-weight:normal}");
+    chunk += F(".radio-group input{margin-right:8px}");
+    chunk += F(".info-box{background:#e8f0fe;color:#174ea6;padding:12px;border-radius:6px;font-size:13px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between}");
+    chunk += F("</style>");
     
-    String html = R"rawliteral(<!DOCTYPE html>
-<html lang="it">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Configurazione Dashboard</title>
-    <style>
-        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; color: #333; }
-        .container { background: white; max-width: 450px; margin: 0 auto; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
-        h1 { text-align: center; color: #0d6efd; margin-top: 0; margin-bottom: 30px; font-size: 24px; }
-        h2 { font-size: 16px; color: #666; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-top: 25px; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 0.5px; }
-        label { display: block; margin-bottom: 5px; font-weight: 500; font-size: 14px; }
-        input[type="text"], input[type="number"], input[type="password"], select { width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 14px; transition: border-color 0.2s; }
-        input:focus, select:focus { border-color: #0d6efd; outline: none; }
-        .radio-group { display: flex; gap: 20px; margin-bottom: 15px; }
-        .radio-group label { font-weight: normal; cursor: pointer; display: flex; align-items: center; gap: 5px; }
-        button { width: 100%; padding: 12px; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.2s; margin-top: 10px; }
-        .btn-save { background-color: #0d6efd; color: white; }
-        .btn-save:hover { background-color: #0b5ed7; }
-        .btn-reboot { background-color: #ffc107; color: #000; margin-top: 15px; }
-        .btn-reboot:hover { background-color: #ffca2c; }
-        .hidden { display: none; }
-        .note { font-size: 12px; color: #888; margin-top: -10px; margin-bottom: 15px; }
-    </style>
-    <script>
-        function toggleIP() {
-            const isStatic = document.querySelector('input[name="network_mode"]:checked').value === 'static';
-            const staticFields = document.getElementById('static-fields');
-            staticFields.style.display = isStatic ? 'block' : 'none';
-        }
-        
-        function loadNetworks() {
-            var sel = document.getElementsByName('wifi_ssid')[0];
-            fetch('/scan')
-                .then(function(response) { return response.text(); })
-                .then(function(html) {
-                    if(html.trim() !== "") {
-                        sel.innerHTML = html;
-                    } else {
-                        var current = sel.value;
-                        sel.innerHTML = "<option value='" + current + "' selected>" + current + " (Salvata - Nessuna rete trovata)</option>";
-                    }
-                })
-                .catch(function(err) {
-                    console.error('Scan error', err);
-                });
-        }
-        
-        window.onload = function() {
-            loadNetworks();
-        };
-    </script>
-</head>
-<body>
-    <div class="container">
-        <h1>Configurazione Dashboard</h1>
-        
-        <button onclick="location.href='/'" style="background-color: #6c757d; color: white; margin-bottom: 20px;">⬅ Torna alla Dashboard</button>
-
-        <form action="/save" method="post">
-            
-            <h2>Connessione WiFi</h2>
-            <label>Rete WiFi (SSID)</label>
-            <select name="wifi_ssid">
-                <option value=")rawliteral";
-            
-    server.sendContent(html);
-    server.sendContent(String(wifi_ssid));
-    server.sendContent(F("\" selected>"));
-    server.sendContent(String(wifi_ssid));
-    if (strlen(wifi_ssid) > 0) server.sendContent(F(" (Salvata - Scansione in corso...)"));
-    else server.sendContent(F("Scansione in corso..."));
-    server.sendContent(F("</option>"));
+    // --- JS ---
+    chunk += F("<script>");
+    chunk += F("function toggleStatic(){var v=document.querySelector('input[name=\"network_mode\"]:checked').value;document.getElementById('static_fields').style.display=(v=='static')?'block':'none';}");
+    chunk += F("function loadNetworks(){var btn=document.getElementById('scanBtn');btn.innerText='Scansione in corso...';fetch('/scan').then(r=>r.text()).then(h=>{document.getElementById('wifi_list').innerHTML=h;btn.innerText='Scansiona WiFi';});}");
+    chunk += F("function fillSSID(val){document.getElementById('ssid_input').value=val;}");
+    chunk += F("window.onload=function(){toggleStatic();loadNetworks();};");
+    chunk += F("</script></head><body>");
     
-    html = R"rawliteral(
-            </select>
-            <label>Password WiFi</label>
-            <input type="password" name="wifi_password" placeholder="Inserisci password..." value=")rawliteral";
-    server.sendContent(html);
-    server.sendContent(String(wifi_password));
+    chunk += F("<div class='container'>");
+    chunk += F("<h2>⚙️ Setup Dashboard</h2>");
     
-    html = R"rawliteral(">
+    // Info Box
+    chunk += F("<div class='info-box'><span>IP: ");
+    if (WiFi.status() == WL_CONNECTED) {
+        chunk += WiFi.localIP().toString();
+    } else {
+        chunk += WiFi.softAPIP().toString();
+    }
+    chunk += F("</span><span>v");
+    chunk += String(FIRMWARE_VERSION);
+    chunk += F("</span></div>");
 
-            <h2>MQTT Broker</h2>
-            <label>Indirizzo Server</label>
-            <input type="text" name="mqtt_server" placeholder="es. 192.168.1.100" value=")rawliteral";
-    server.sendContent(html);
-    server.sendContent(String(mqtt_server));
+    chunk += F("<form action='/save' method='post'>");
+    server.sendContent(chunk);
+
+    // SAFETY COPIES
+    String s_ssid = String(wifi_ssid);
+    String s_pass = String(wifi_password);
+    String s_mqtt_srv = String(mqtt_server);
+    String s_mqtt_usr = String(mqtt_user);
+    String s_mqtt_pwd = String(mqtt_password);
+    String s_mqtt_pre = String(mqtt_topic_prefix);
+    String s_ntp = String(ntp_server);
+    String s_gw_id = String(gateway_id);
+
+    // --- 2. WIFI SECTION ---
+    chunk = F("<div class='section-title'>📶 Connessione WiFi</div>");
+    chunk += F("<button type='button' id='scanBtn' class='btn btn-scan' onclick='loadNetworks()'>� Scansiona Reti</button>");
+    chunk += F("<div class='input-group'><label>Reti Trovate:</label><select id='wifi_list' onchange='fillSSID(this.value)'><option>Caricamento...</option></select></div>");
+    chunk += F("<div class='input-group'><label>SSID Rete</label><input type='text' id='ssid_input' name='wifi_ssid' value='");
+    chunk += s_ssid;
+    chunk += F("' placeholder='Nome della rete'></div>");
+    chunk += F("<div class='input-group'><label>Password WiFi</label><input type='password' name='wifi_password' value='");
+    chunk += s_pass;
+    chunk += F("' placeholder='Password WPA2'></div>");
+    server.sendContent(chunk);
+
+    // --- 3. MQTT SECTION ---
+    chunk = F("<div class='section-title'>☁️ Configurazione MQTT</div>");
+    chunk += F("<div class='input-group'><label>Broker Server</label><input type='text' name='mqtt_server' value='");
+    chunk += s_mqtt_srv;
+    chunk += F("' placeholder='es. 192.168.1.100'></div>");
+    chunk += F("<div class='input-group'><label>Porta</label><input type='number' name='mqtt_port' value='");
+    chunk += String(mqtt_port);
+    chunk += F("'></div>");
+    chunk += F("<div class='input-group'><label>Utente</label><input type='text' name='mqtt_user' value='");
+    chunk += s_mqtt_usr;
+    chunk += F("'></div>");
+    chunk += F("<div class='input-group'><label>Password</label><input type='password' name='mqtt_password' value='");
+    chunk += s_mqtt_pwd;
+    chunk += F("'></div>");
+    chunk += F("<div class='input-group'><label>Topic Prefix</label><input type='text' name='mqtt_topic_prefix' value='");
+    chunk += s_mqtt_pre;
+    chunk += F("'></div>");
+    server.sendContent(chunk);
+
+    // --- 4. NTP & DEVICE ---
+    chunk = F("<div class='section-title'>🕒 Orologio & ID</div>");
+    chunk += F("<div class='input-group'><label>Server NTP</label><input type='text' name='ntp_server' value='");
+    chunk += s_ntp;
+    chunk += F("'></div>");
+    chunk += F("<div class='input-group'><label>Fuso Orario (GMT)</label><input type='number' step='0.5' name='ntp_timezone' value='");
+    chunk += String(ntp_timezone);
+    chunk += F("'></div>");
+    chunk += F("<div class='input-group'><label>ID Dispositivo</label><input type='text' name='gateway_id' value='");
+    chunk += s_gw_id;
+    chunk += F("'></div>");
+    server.sendContent(chunk);
+
+    // --- 5. NETWORK MODE ---
+    chunk = F("<div class='section-title'>🌐 Impostazioni IP</div>");
+    chunk += F("<div class='radio-group'>");
+    chunk += F("<label><input type='radio' name='network_mode' value='dhcp' onclick='toggleStatic()' ");
+    if (strcmp(network_mode, "dhcp") == 0) chunk += "checked";
+    chunk += F("> DHCP (Automatico)</label>");
+    chunk += F("<label><input type='radio' name='network_mode' value='static' onclick='toggleStatic()' ");
+    if (strcmp(network_mode, "static") == 0) chunk += "checked";
+    chunk += F("> IP Statico</label></div>");
     
-    html = R"rawliteral(">
-            <div style="display: flex; gap: 10px;">
-                <div style="flex: 1;">
-                    <label>Porta</label>
-                    <input type="number" name="mqtt_port" value=")rawliteral";
-    server.sendContent(html);
-    server.sendContent(String(mqtt_port));
-
-    html = R"rawliteral(">
-                </div>
-                <div style="flex: 2;">
-                    <label>User (Opzionale)</label>
-                    <input type="text" name="mqtt_user" value=")rawliteral";
-    server.sendContent(html);
-    server.sendContent(String(mqtt_user));
-
-    html = R"rawliteral(">
-                </div>
-            </div>
-            <label>Password (Opzionale)</label>
-            <input type="password" name="mqtt_password" value=")rawliteral";
-    server.sendContent(html);
-    server.sendContent(String(mqtt_password));
+    chunk += F("<div id='static_fields' style='display:none'>");
+    chunk += F("<div class='input-group'><label>Indirizzo IP</label><input type='text' name='static_ip' value='");
+    chunk += String(static_ip);
+    chunk += F("' placeholder='192.168.1.200'></div>");
+    chunk += F("<div class='input-group'><label>Gateway</label><input type='text' name='static_gateway' value='");
+    chunk += String(static_gateway);
+    chunk += F("' placeholder='192.168.1.1'></div>");
+    chunk += F("<div class='input-group'><label>Subnet Mask</label><input type='text' name='static_subnet' value='");
+    chunk += String(static_subnet);
+    chunk += F("' placeholder='255.255.255.0'></div>");
+    chunk += F("<div class='input-group'><label>DNS Server</label><input type='text' name='static_dns' value='");
+    chunk += String(static_dns);
+    chunk += F("' placeholder='8.8.8.8'></div>");
+    chunk += F("</div>");
     
-    html = R"rawliteral(">
-            <label>Prefisso Topic</label>
-            <input type="text" name="mqtt_topic_prefix" value=")rawliteral";
-    server.sendContent(html);
-    server.sendContent(String(mqtt_topic_prefix));
-
-    html = R"rawliteral(">
-
-            <h2>🕒 Configurazione Orario (NTP)</h2>
-            <div class="form-group">
-                <label for="ntp_server">Server NTP</label>
-                <input type="text" id="ntp_server" name="ntp_server" value=")rawliteral";
-    server.sendContent(html);
-    server.sendContent(String(ntp_server));
-    server.sendContent(F("\"></div>"));
-
-    server.sendContent(F("<div class=\"form-group\"><label for=\"ntp_timezone\">Fuso Orario (Ore)</label><input type=\"number\" step=\"0.5\" id=\"ntp_timezone\" name=\"ntp_timezone\" value=\""));
-    server.sendContent(String(ntp_timezone));
-    server.sendContent(F("\"> <small>(es. 1 per GMT+1)</small></div>"));
-
-    html = R"rawliteral(
-            <div class="radio-group" style="margin-top: 10px;">
-                <label><input type="checkbox" name="ntp_dst" value="1" )rawliteral";
-    server.sendContent(html);
-    if (ntp_dst) server.sendContent("checked");
-    server.sendContent(F("> Ora Legale (DST)</label></div>"));
-
-    html = R"rawliteral(
-
-            <h2>Impostazioni Dispositivo</h2>
-            <label>ID Dashboard</label>
-            <input type="text" name="gateway_id" value=")rawliteral";
-    server.sendContent(html);
-    server.sendContent(String(gateway_id));
-
-    html = R"rawliteral(">
-
-            <h2>Configurazione IP</h2>
-            <div class="radio-group">
-                <label><input type="radio" name="network_mode" value="dhcp" onclick="toggleIP()" )rawliteral";
-    server.sendContent(html);
-    if (strcmp(network_mode, "dhcp") == 0) server.sendContent("checked");
+    // --- FOOTER ---
+    chunk += F("<div style='margin-top:30px'>");
+    chunk += F("<input type='submit' value='💾 SALVA E RIAVVIA' class='btn'>");
     
-    html = R"rawliteral(> Automatico (DHCP)</label>
-                <label><input type="radio" name="network_mode" value="static" onclick="toggleIP()" )rawliteral";
-    server.sendContent(html);
-    if (strcmp(network_mode, "static") == 0) server.sendContent("checked");
-
-    html = R"rawliteral(> Statico</label>
-            </div>)rawliteral";
-    server.sendContent(html);
-
-    // --- Static IP Fields (Generated dynamically to avoid HTML issues) ---
-    String staticHtml = F("<div id=\"static-fields\" style=\"display: ");
-    staticHtml += (strcmp(network_mode, "static") == 0 ? "block" : "none");
-    staticHtml += F(";\">");
-
-    staticHtml += F("<label>Indirizzo IP</label><input type=\"text\" name=\"static_ip\" placeholder=\"es. 192.168.1.50\" value=\"");
-    staticHtml += String(static_ip);
-    staticHtml += F("\"><br>");
-
-    staticHtml += F("<label>Gateway</label><input type=\"text\" name=\"static_gateway\" placeholder=\"es. 192.168.1.1\" value=\"");
-    staticHtml += String(static_gateway);
-    staticHtml += F("\"><br>");
-
-    staticHtml += F("<label>Subnet Mask</label><input type=\"text\" name=\"static_subnet\" placeholder=\"es. 255.255.255.0\" value=\"");
-    staticHtml += String(static_subnet);
-    staticHtml += F("\"><br>");
-
-    staticHtml += F("<label>DNS Server</label><input type=\"text\" name=\"static_dns\" placeholder=\"es. 8.8.8.8\" value=\"");
-    staticHtml += String(static_dns);
-    staticHtml += F("\"><br></div>");
+    // Tasto Reset to AP Mode (Rosso)
+    chunk += F("<button type='button' onclick=\"if(confirm('Resettare le impostazioni WiFi e tornare in modalità AP?')) { fetch('/reset_ap', {method:'POST'}).then(r => { alert('Reset avviato. Connettiti a ESP32-Dashboard-Config'); window.location.reload(); }); }\" class='btn' style='background-color:#dc3545; margin-top:10px;'>⚠️ RESET TO AP MODE</button>");
     
-    staticHtml += F("<button type=\"submit\" class=\"btn-save\">💾 Salva Configurazione</button></form>");
-    server.sendContent(staticHtml);
-
-    html = R"rawliteral(
-        
-        <form action="/reboot" method="post" onsubmit="return confirm('Sei sicuro di voler riavviare il dispositivo?');">
-            <button type="submit" class="btn-reboot">🔄 Riavvia Dispositivo</button>
-        </form>
-        
-        <form action="/reset_ap" method="post" onsubmit="return confirm('ATTENZIONE: Questo cancellerà le impostazioni WiFi e riavvierà il dispositivo in modalità Access Point. Continuare?');">
-            <button type="submit" class="btn-reboot" style="background-color: #dc3545; color: white; margin-top: 10px;">⚠️ Reset to AP Mode</button>
-        </form>
-    </div>
-</body>
-</html>)rawliteral";
-    server.sendContent(html);
-    server.sendContent(""); // Terminate chunked response
+    // Mostra il tasto Home solo se NON siamo in modalità AP (quindi siamo in Station mode)
+    // WiFi.getMode() restituisce WIFI_AP, WIFI_STA o WIFI_AP_STA.
+    // In modalità config pura siamo in WIFI_AP o WIFI_AP_STA.
+    // Se siamo connessi a un router (WIFI_STA), mostriamo il tasto.
+    if (WiFi.status() == WL_CONNECTED && !configMode) {
+        chunk += F("<a href='/' class='btn' style='background-color:#6c757d; margin-top:10px; box-sizing: border-box;'>🏠 TORNA ALLA HOME</a>");
+    }
+    
+    chunk += F("</div></form></div></body></html>");
+    server.sendContent(chunk);
+    
+    server.sendContent(""); // Terminate
+    DevLog.println("[WEB] handleConfigRoot END");
 }
 
 void handleConfigSave() {
@@ -800,6 +753,11 @@ void populateJson(DynamicJsonDocument& doc) {
     dashboardObj["buildDate"] = String(BUILD_DATE) + " " + String(BUILD_TIME);
     dashboardObj["uptime"] = millis();
     dashboardObj["mqttPrefix"] = mqtt_topic_prefix;
+    
+    IPAddress apIP = WiFi.softAPIP();
+    bool isViaAP = (apIP != IPAddress(0,0,0,0) && server.client().localIP() == apIP);
+    dashboardObj["isConfigMode"] = configMode || isViaAP;
+    
     dashboardObj["wifiSignal"] = WiFi.RSSI();
     dashboardObj["ip"] = WiFi.localIP().toString();
     dashboardObj["mac"] = WiFi.macAddress();
@@ -1428,7 +1386,13 @@ void setup() {
         mqttClient.setKeepAlive(60);    
         
         DevLog.println("[SETUP] Configurazione Web Server...");
-        server.on("/", handleRoot);
+        server.on("/", HTTP_GET, []() {
+            if (server.client().localIP() == WiFi.softAPIP()) {
+                handleConfigRoot();
+                return;
+            }
+            handleRoot();
+        });
         server.on("/api/data", HTTP_GET, handleApiData);
         server.on("/api/command", HTTP_POST, handleApiCommand);
         

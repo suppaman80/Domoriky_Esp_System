@@ -4,10 +4,16 @@
 #include "MqttHandler.h"
 #include "EspNowHandler.h"
 #include "NodeTypeManager.h"
+#include "HaDiscovery.h"
 #include <ESP8266WiFi.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "version.h"
+#include <ESP8266httpUpdate.h>
+#include <ArduinoOTA.h>
+
+// Global OTA Status Tracker
+OtaStatus globalOtaStatus = {"", "IDLE", 0, "", 0};
 
 // Dashboard Discovery
 String discoveredDashboardIP = "";
@@ -84,95 +90,14 @@ void setupWebRoutes() {
         configServer.sendHeader("Access-Control-Max-Age", "86400"); // Cache preflight per 24h
         configServer.send(200); 
     };
-
-    // API Command (Direct Gateway Control)
-    configServer.on("/api/command", HTTP_OPTIONS, sendCors);
-    configServer.on("/api/command", HTTP_POST, []() {
-        configServer.sendHeader("Access-Control-Allow-Origin", "*");
-        
-        if (!configServer.hasArg("plain")) {
-            configServer.send(400, "application/json", "{\"error\":\"Body missing\"}");
-            return;
-        }
-        
-        DynamicJsonDocument doc(1024);
-        DeserializationError error = deserializeJson(doc, configServer.arg("plain"));
-        
-        if (error) {
-            configServer.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
-            return;
-        }
-        
-        String command = doc["command"] | "";
-        
-        if (command == "NODE_FACTORY_RESET") {
-             if (!doc.containsKey("nodeId")) {
-                 configServer.send(400, "application/json", "{\"error\":\"Missing nodeId\"}");
-                 return;
-             }
-             String targetNodeId = doc["nodeId"];
-             
-             bool nodeFound = false;
-             for (int i = 0; i < peerCount; i++) {
-                 if (String(peerList[i].nodeId) == targetNodeId) {
-                     espNow.send(peerList[i].mac, peerList[i].nodeId, "CONTROL", "FACTORY_RESET", "", "COMMAND", gateway_id);
-                     DevLog.printf("Factory reset sent to node %s via HTTP API\n", targetNodeId.c_str());
-                     nodeFound = true;
-                     break;
-                 }
-             }
-             
-             if (nodeFound) {
-                 configServer.send(200, "application/json", "{\"status\":\"ok\", \"message\":\"Factory Reset Sent\"}");
-             } else {
-                 configServer.send(404, "application/json", "{\"error\":\"Node not found\"}");
-             }
-             return;
-        }
-        
-        configServer.send(400, "application/json", "{\"error\":\"Unknown command\"}");
-    });
-
     configServer.on("/trigger_ota", HTTP_OPTIONS, sendCors);
-    configServer.on("/trigger_ota", HTTP_POST, []() {
-        configServer.sendHeader("Access-Control-Allow-Origin", "*");
-        
-        if (!configServer.hasArg("nodeId") || !configServer.hasArg("url")) {
-            configServer.send(400, "text/plain", "Missing parameters");
-            return;
-        }
-
-        String targetNodeId = configServer.arg("nodeId");
-        String url = configServer.arg("url");
-        
-        // Find MAC
-        uint8_t* targetMac = nullptr;
-        for (int i = 0; i < peerCount; i++) {
-            if (String(peerList[i].nodeId) == targetNodeId) {
-                targetMac = peerList[i].mac;
-                break;
-            }
-        }
-
-        if (!targetMac) {
-            configServer.send(404, "text/plain", "Node not found");
-            return;
-        }
-
-        // Construct Payload: SSID|PASS|URL
-        // Usa le credenziali salvate o quelle correnti
-        String ssidToSend = strlen(saved_wifi_ssid) > 0 ? String(saved_wifi_ssid) : String(wifi_ssid);
-        String passToSend = strlen(saved_wifi_password) > 0 ? String(saved_wifi_password) : String(wifi_password);
-        
-        String payload = ssidToSend + "|" + passToSend + "|" + url;
-
-        // Send Command
-        espNow.send(targetMac, targetNodeId.c_str(), "CONTROL", "OTA_UPDATE", payload.c_str(), "COMMAND", gateway_id);
-        
-        DevLog.printf("🚀 Triggered Node OTA for %s (URL: %s)\n", targetNodeId.c_str(), url.c_str());
-        configServer.send(200, "text/plain", "OTA Triggered");
-    });
     configServer.on("/api/dashboard_discover", HTTP_OPTIONS, sendCors);
+    configServer.on("/api/node/remove", HTTP_OPTIONS, sendCors);
+    configServer.on("/api/node/restart", HTTP_OPTIONS, sendCors);
+    configServer.on("/api/node/reset", HTTP_OPTIONS, sendCors);
+    configServer.on("/api/network_discovery", HTTP_OPTIONS, sendCors);
+    configServer.on("/api/node/ha_discovery", HTTP_OPTIONS, sendCors);
+    configServer.on("/api/ping_network", HTTP_OPTIONS, sendCors);
     
     configServer.on("/", HTTP_GET, handleRoot);
     configServer.on("/api/dashboard_info", HTTP_GET, handleApiDashboardInfo);
@@ -183,39 +108,10 @@ void setupWebRoutes() {
         configServer.send(200, "text/plain", "Discovery Sent");
     });
     configServer.on("/save", HTTP_POST, handleSave);
-
-    // Gateway Firmware Update Handler (OTA)
-    configServer.on("/update_gateway", HTTP_POST, []() {
-        configServer.sendHeader("Access-Control-Allow-Origin", "*");
-        configServer.sendHeader("Connection", "close");
-        configServer.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
-        delay(1000);
-        ESP.restart();
-    }, []() {
-        HTTPUpload& upload = configServer.upload();
-        if (upload.status == UPLOAD_FILE_START) {
-            DevLog.printf("📡 Aggiornamento FW Gateway avviato: %s\n", upload.filename.c_str());
-            // Start with max available size
-            uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
-            if (!Update.begin(maxSketchSpace)) { 
-                DevLog.println("❌ Errore Inizio OTA");
-                Update.printError(Serial);
-            }
-        } else if (upload.status == UPLOAD_FILE_WRITE) {
-            if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
-                // Write error
-            }
-        } else if (upload.status == UPLOAD_FILE_END) {
-            if (Update.end(true)) { // true to set the size to the current progress
-                DevLog.printf("✅ OTA Completato con successo: %u bytes\n", upload.totalSize);
-            } else {
-                DevLog.println("❌ Errore Fine OTA");
-                Update.printError(Serial);
-            }
-        }
-    });
-
     configServer.on("/settings", HTTP_GET, handleSettings);
+    configServer.on("/nodes", HTTP_GET, handleNodes);
+    configServer.on("/ota_manager", HTTP_GET, handleOtaManager);
+    configServer.on("/gateway_ota", HTTP_GET, handleGatewayOTA);
     
     configServer.on("/debug", HTTP_GET, []() {
         configServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -307,9 +203,42 @@ void setupWebRoutes() {
     configServer.on("/factory_reset", HTTP_POST, handleFactoryReset);
     
     // API
+    configServer.on("/api/nodes_list", HTTP_GET, handleApiNodesList);
     configServer.on("/api/nodetypes", HTTP_GET, []() {
         configServer.send(200, "application/json", NodeTypeManager::getJsonConfig());
     });
+    configServer.on("/api/node/remove", HTTP_POST, handleDeleteNode);
+    configServer.on("/api/node/restart", HTTP_POST, handleApiNodeRestart);
+    configServer.on("/api/node/reset", HTTP_POST, handleApiNodeReset);
+    configServer.on("/api/ping_node", HTTP_GET, handleApiPingNode);
+    configServer.on("/api/node_status", HTTP_GET, handleApiNodeStatus);
+    configServer.on("/api/network_discovery", HTTP_POST, handleNetworkDiscovery);
+    configServer.on("/api/node/ha_discovery", HTTP_POST, handleApiForceHaDiscovery);
+    configServer.on("/api/ping_network", HTTP_POST, handlePingNetwork);
+    configServer.on("/api/ota_status", HTTP_GET, handleApiOtaStatus);
+    
+    // OTA Handlers
+
+    configServer.on("/trigger_ota", HTTP_POST, handleTriggerOta);
+    // Fix CORS Preflight for update_gateway
+    configServer.on("/update_gateway", HTTP_OPTIONS, [](){
+        configServer.sendHeader("Access-Control-Allow-Origin", "*");
+        configServer.sendHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE");
+        configServer.sendHeader("Access-Control-Allow-Headers", "Content-Type, Content-Length, X-Requested-With");
+        configServer.sendHeader("Access-Control-Max-Age", "86400");
+        configServer.send(200);
+    });
+    configServer.on("/update_gateway", HTTP_POST, [](){
+        configServer.sendHeader("Access-Control-Allow-Origin", "*");
+        configServer.sendHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE"); // Aggiunto per sicurezza
+        if (Update.hasError()) {
+            configServer.send(500, "text/plain", "Update Failed");
+        } else {
+            configServer.send(200, "text/plain", "Update Success! Rebooting...");
+            delay(1000);
+            ESP.restart();
+        }
+    }, handleGatewayUpdate);
     
     configServer.onNotFound(handleNotFound);
 }
@@ -353,9 +282,27 @@ void handleNotFound() {
     
     if (configServer.method() == HTTP_OPTIONS) {
         configServer.send(200);
-    } else {
-        configServer.send(404, "text/plain", "Not Found");
+        return;
     }
+
+    // CAPTIVE PORTAL REDIRECT
+    // Se siamo in modalità AP e la richiesta non è per l'IP del gateway,
+    // reindirizza alla home page.
+    if (WiFi.getMode() & WIFI_AP) {
+        String hostHeader = configServer.hostHeader();
+        String softApIP = WiFi.softAPIP().toString();
+        
+        // Se l'host richiesto NON è l'IP del SoftAP, reindirizza
+        if (hostHeader != softApIP && hostHeader != (String(gateway_id) + ".local")) {
+            DevLog.printf("CP Redirect: %s -> %s\n", hostHeader.c_str(), softApIP.c_str());
+            configServer.sendHeader("Location", String("http://") + softApIP + "/", true);
+            configServer.send(302, "text/plain", "");
+            configServer.client().stop();
+            return;
+        }
+    }
+
+    configServer.send(404, "text/plain", "Not Found");
 }
 
 // -------------------------------------------------------------------------
@@ -363,6 +310,12 @@ void handleNotFound() {
 // -------------------------------------------------------------------------
 
 void handleRoot() {
+    // SE SIAMO IN MODALITÀ AP (CONFIGURAZIONE), MOSTRA DIRETTAMENTE LA PAGINA DI SETUP
+    if (WiFi.getMode() & WIFI_AP) {
+        handleSettings();
+        return;
+    }
+
     printDebugStats("START handleRoot");
     configServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
     configServer.send(200, "text/html", "");
@@ -430,27 +383,6 @@ void handleRoot() {
     configServer.sendContent("<div><b>📡 MAC Address:</b> " + WiFi.macAddress() + "</div>");
     configServer.sendContent("<div><b>🌐 IP Address:</b> " + WiFi.localIP().toString() + "</div>");
     configServer.sendContent(F("</div></div>"));
-
-    // Linked Nodes Section (Read-only)
-    configServer.sendContent(F("<div class='section'><h2>🔗 Nodi Linkati</h2>"));
-    if (peerCount == 0) {
-        configServer.sendContent(F("<p>Nessun nodo collegato.</p>"));
-    } else {
-        configServer.sendContent(F("<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:14px'><thead><tr style='background:#eee;text-align:left'><th style='padding:8px'>Nome</th><th style='padding:8px'>MAC</th><th style='padding:8px'>FW</th><th style='padding:8px'>Stato</th></tr></thead><tbody>"));
-        for (int i = 0; i < peerCount; i++) {
-             String macStr = macToString(peerList[i].mac);
-             bool isOnline = (millis() - peerList[i].lastSeen) < 60000; // 60s timeout
-             String statusColor = isOnline ? "#198754" : "#dc3545";
-             String statusText = isOnline ? "ONLINE" : "OFFLINE";
-             
-             configServer.sendContent("<tr><td style='padding:8px;border-bottom:1px solid #ddd'>" + String(peerList[i].nodeId) + 
-                                      "</td><td style='padding:8px;border-bottom:1px solid #ddd;font-family:monospace'>" + macStr + 
-                                      "</td><td style='padding:8px;border-bottom:1px solid #ddd'>" + String(peerList[i].firmwareVersion) + 
-                                      "</td><td style='padding:8px;border-bottom:1px solid #ddd;font-weight:bold;color:" + statusColor + "'>" + statusText + "</td></tr>");
-        }
-        configServer.sendContent(F("</tbody></table></div>"));
-    }
-    configServer.sendContent(F("</div>"));
     
     // LED Control Section Removed (Moved to Setup)
 
@@ -459,12 +391,20 @@ void handleRoot() {
         configServer.sendContent(F("<div class='success-message'>✅ Configurazione salvata con successo!</div>"));
     }
     
+    configServer.sendContent(F("<div class='section'><h2>🛠️ Strumenti</h2>"));
+    configServer.sendContent(F("<button class='settings-btn' style='background:#009688;margin-bottom:10px' onclick=\"window.location.href='/nodes'\">📦 Gestione Nodi</button>"));
+    configServer.sendContent(F("<div style='display:grid;grid-template-columns:1fr 1fr;gap:10px'>"));
+    configServer.sendContent(F("<button class='ota-btn' onclick=\"window.location.href='/ota_manager'\">🚀 Node OTA</button>"));
+    configServer.sendContent(F("<input type='file' id='gw_update' accept='.bin' style='display:none' onchange='uploadGatewayFw(this)'>"));
+    configServer.sendContent(F("<button class='gw-ota-btn' onclick=\"document.getElementById('gw_update').click()\">☁️ Gateway OTA</button>"));
+    configServer.sendContent(F("</div>"));
     configServer.sendContent(F("<form action='/reboot' method='post' style='margin-top:10px'><button type='submit' class='reboot-btn'>🔄 Riavvia Gateway</button></form>"));
     configServer.sendContent(F("<form action='/reset_ap' method='post' style='margin-top:10px' onsubmit=\"return confirm('Sei sicuro? Questo cancellerà le credenziali WiFi e riavvierà in modalità AP.')\"><button type='submit' class='reset-ap-btn'>⚠️ Reset WiFi & AP Mode</button></form>"));
     configServer.sendContent(F("<form action='/factory_reset' method='post' style='margin-top:10px' onsubmit=\"return confirm('ATTENZIONE: Questo cancellerà TUTTI i dati (WiFi, Peer, Configurazione) e ripristinerà il gateway alle impostazioni di fabbrica. Sei sicuro?')\"><button type='submit' class='reset-ap-btn' style='background:#b71c1c'>☢️ Factory Reset</button></form>"));
     
     // Dashboard Auto-Discovery Script
     configServer.sendContent(F("<script>"));
+    configServer.sendContent(F("function uploadGatewayFw(input){if(!input.files.length)return;if(!confirm('Sei sicuro di voler aggiornare il firmware del Gateway? Il dispositivo si riavvierà.')){input.value='';return;}var d=new FormData();d.append('update',input.files[0]);fetch('/update_gateway',{method:'POST',body:d}).then(r=>{if(r.ok){alert('Aggiornamento riuscito! Il dispositivo si riavvierà...');setTimeout(()=>location.reload(),10000);}else{alert('Errore aggiornamento');input.value='';}}).catch(e=>{alert('Errore: '+e);input.value='';});}"));
     configServer.sendContent(F("function checkDashboard(){fetch('/api/dashboard_info').then(r=>r.json()).then(d=>{"));
     configServer.sendContent(F("const btn=document.getElementById('dashboardBtn');"));
     configServer.sendContent(F("if(d.found){"));
@@ -667,6 +607,263 @@ void handleSave() {
     }
 }
 
+void handleNodes() {
+    configServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    configServer.send(200, "text/html", "");
+    configServer.sendContent(F("<!DOCTYPE html><html><head><title>Gestione Nodi</title>"));
+    configServer.sendContent(F("<meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"));
+    configServer.sendContent(F("<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0}"));
+    configServer.sendContent(F(".container{background:white;padding:20px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1);max-width:800px;margin:0 auto}"));
+    configServer.sendContent(F("h1{color:#333;text-align:center}table{width:100%;border-collapse:collapse;margin-top:20px}"));
+    configServer.sendContent(F("th,td{padding:12px;text-align:left;border-bottom:1px solid #ddd}th{background-color:#4CAF50;color:white}"));
+    configServer.sendContent(F("tr:hover{background-color:#f5f5f5}.btn{padding:6px 12px;border:none;border-radius:4px;cursor:pointer;margin-right:5px;color:white}"));
+    configServer.sendContent(F(".btn-restart{background:#ff9800}.btn-reset{background:#f44336}.btn-remove{background:#607d8b}"));
+    configServer.sendContent(F(".btn-disc{background:#2196F3;width:100%;margin-bottom:10px;padding:12px}.btn-ping{background:#9c27b0;width:100%;margin-bottom:10px;padding:12px}"));
+    configServer.sendContent(F(".back-btn{background:#6c757d;width:100%;padding:12px;margin-top:20px}"));
+    configServer.sendContent(F(".status-online{color:green;font-weight:bold}.status-offline{color:red;font-weight:bold}</style>"));
+    
+    configServer.sendContent(F("<script>function loadNodes(){fetch('/api/nodes_list').then(r=>r.json()).then(d=>{let h='';d.nodes.forEach(n=>{"));
+    configServer.sendContent(F("h+='<tr><td>'+n.id+'</td><td>'+n.type+'</td><td>'+n.mac+'</td><td>'+n.firmware+'</td>';"));
+    configServer.sendContent(F("h+='<td class=\"'+(n.online?'status-online':'status-offline')+'\">'+(n.online?'ONLINE':'OFFLINE')+'</td>';"));
+    configServer.sendContent(F("h+='<td><button class=\"btn btn-restart\" onclick=\"api(\\'restart\\',\\''+n.id+'\\')\">🔄</button>';"));
+    configServer.sendContent(F("h+='<button class=\"btn btn-reset\" onclick=\"if(confirm(\\'Reset WiFi?\\'))api(\\'reset\\',\\''+n.id+'\\')\">⚠️</button>';"));
+    configServer.sendContent(F("h+='<button class=\"btn btn-remove\" onclick=\"if(confirm(\\'Remove?\\'))remove(\\''+n.mac+'\\')\">🗑️</button></td></tr>';});"));
+    configServer.sendContent(F("document.getElementById('list').innerHTML=h;});}"));
+    configServer.sendContent(F("function api(act,id){fetch('/api/node/'+act+'?nodeId='+id,{method:'POST'}).then(r=>r.json()).then(d=>alert(d.message||d.error));}"));
+    configServer.sendContent(F("function remove(mac){fetch('/api/node/remove?mac='+mac,{method:'POST'}).then(r=>r.json()).then(d=>{alert(d.message||d.error);loadNodes();});}"));
+    configServer.sendContent(F("function disc(){fetch('/api/network_discovery',{method:'POST'}).then(r=>r.json()).then(d=>alert(d.message));}"));
+    configServer.sendContent(F("function pingNet(){fetch('/api/ping_network',{method:'POST'}).then(r=>r.json()).then(d=>alert(d.message));}"));
+    configServer.sendContent(F("setInterval(loadNodes,5000);window.onload=loadNodes;</script>"));
+    
+    configServer.sendContent(F("</head><body><div class='container'><h1>📦 Gestione Nodi</h1>"));
+    configServer.sendContent(F("<button class='btn btn-disc' onclick='disc()'>🔎 Avvia Discovery</button>"));
+    configServer.sendContent(F("<button class='btn btn-ping' onclick='pingNet()'>📡 Ping Network</button>"));
+    configServer.sendContent(F("<table><thead><tr><th>ID</th><th>Tipo</th><th>MAC</th><th>FW</th><th>Stato</th><th>Azioni</th></tr></thead><tbody id='list'></tbody></table>"));
+    configServer.sendContent(F("<button class='btn back-btn' onclick=\"location.href='/'\">⬅ Torna alla Home</button></div></body></html>"));
+    configServer.sendContent(""); // Terminate chunked response
+}
+
+void handleOtaManager() {
+    configServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    configServer.send(200, "text/html", "");
+    String html = F("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<style>body{font-family:sans-serif;margin:20px;background:#f4f4f4}.card{background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px #0002;max-width:600px;margin:auto}h1,h3{color:#333;margin-bottom:10px}input,select,button{width:100%;padding:10px;margin:5px 0;border:1px solid #ddd;border-radius:4px;box-sizing:border-box}button{background:#007bff;color:#fff;border:none;cursor:pointer}button:hover{background:#0056b3}.back{background:#6c757d}.success{color:#28a745}.error{color:#dc3545}"
+    "#px{display:none;margin-top:20px;background:#e9ecef;border-radius:4px}#pb{height:20px;background:#28a745;width:0%;border-radius:4px;color:#fff;text-align:center;font-size:12px;line-height:20px;transition:width .2s}"
+    "#ota-status-area{display:none;margin-top:20px;padding:15px;background:#f8f9fa;border-radius:4px;border:1px solid #ddd}#ota-log{font-family:monospace;font-size:12px;height:100px;overflow-y:auto;background:#333;color:#0f0;padding:5px;margin-top:10px;border-radius:3px}</style>"
+    "<script>"
+    "function flashNode(e){e.preventDefault();var s=document.getElementById('nodeId');var id=s.value;var u=document.getElementById('url').value;if(!id)return alert('Seleziona nodo');if(!u)return alert('URL Firmware mancante');"
+    "var btn=document.getElementById('flashBtn');btn.disabled=true;btn.innerText='Avvio...';"
+    "var x=document.getElementById('px-node');var b=document.getElementById('pb-node');x.style.display='block';b.style.width='0%';b.innerText='0%';"
+    "var area=document.getElementById('ota-status-area');var badge=document.getElementById('ota-badge');var log=document.getElementById('ota-log');area.style.display='block';badge.innerText='TRIGGERED';"
+    
+    "fetch('/trigger_ota?nodeId='+encodeURIComponent(id)+'&url='+encodeURIComponent(u),{method:'POST'}).then(r=>r.json()).then(d=>{"
+    "  if(d.status!='ok'){alert('Errore avvio');btn.disabled=false;return;}"
+    "  var poll=setInterval(function(){"
+    "    fetch('/api/ota_status').then(r=>r.json()).then(s=>{"
+    "      badge.innerText=s.status; log.innerText=s.lastMessage + '\\n' + log.innerText;"
+    "      if(s.progress!==undefined){ b.style.width=s.progress+'%'; b.innerText=s.progress+'%'; }"
+    "      if(s.status==='SUCCESS'||s.status==='OTA_DONE'){ clearInterval(poll); b.style.width='100%'; b.innerText='100%'; b.style.background='#28a745'; alert('Aggiornamento Completato!'); location.reload(); }"
+    "      else if(s.status.includes('FAIL')||s.status.includes('ERR')){ clearInterval(poll); b.style.background='#dc3545'; btn.disabled=false; btn.innerText='🚀 Flash Node'; alert('Aggiornamento Fallito!'); }"
+    "    });"
+    "  },1000);"
+    "}).catch(e=>{alert('Errore comunicazione');btn.disabled=false;});"
+    "}"
+    "</script>"
+    "</head><body><div class='card'><h1>🚀 Node OTA Manager</h1>");
+    
+    html += F("<div style='background:#f8f9fa;padding:10px;border:1px solid #ddd;font-size:.9em;border-radius:4px'><b>Heap:</b> ");
+    html += String(ESP.getFreeHeap()) + F("b | <b>Up:</b> ") + String(millis()/60000) + "m</div>";
+    
+    configServer.sendContent(html);
+    
+    // Updated Flash Form: AJAX and Progress Bar
+    html = F("<h3>Flash Node (Manual)</h3><p>Per aggiornare i nodi, usa preferibilmente la Dashboard.</p><form onsubmit='flashNode(event)'><label>Seleziona Nodo:</label><select id='nodeId' name='nodeId'>");
+    for (int i = 0; i < peerCount; i++) {
+        html += "<option value='" + String(peerList[i].nodeId) + "'>" + String(peerList[i].nodeId) + " (v" + String(peerList[i].firmwareVersion) + ")</option>";
+    }
+    html += F("</select><label>URL Firmware:</label><input type='text' id='url' name='url' placeholder='http://192.168.x.x/firmware.bin' required>");
+    html += F("<button id='flashBtn'>🚀 Flash Node</button></form>");
+    
+    // Progress Area for Node OTA
+    html += F("<div id='px-node' style='display:none;margin-top:20px;background:#e9ecef;border-radius:4px'><div id='pb-node' style='height:20px;background:#1a73e8;width:0%;border-radius:4px;color:#fff;text-align:center;font-size:12px;line-height:20px;transition:width .2s'>0%</div></div>");
+    
+    // Status Area
+    html += F("<div id='ota-status-area'><div style='font-weight:bold;margin-bottom:5px'>Stato: <span id='ota-badge'>IDLE</span></div><div id='ota-log'>Waiting...</div></div>");
+    
+    html += F("<button class='back' onclick=\"location.href='/'\">⬅ Torna alla Home</button></div></body></html>");
+    configServer.sendContent(html);
+    configServer.sendContent(""); // Terminate chunked response
+}
+
+void handleGatewayOTA() {
+    configServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    configServer.send(200, "text/html", "");
+    configServer.sendContent(F("<!DOCTYPE html><html><head><title>Gateway OTA</title><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"));
+    configServer.sendContent(F("<style>body{font-family:sans-serif;margin:20px;background:#f4f4f4}.card{background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px #0002;max-width:600px;margin:auto}h1,h3{color:#333;margin-bottom:10px}input,select,button{width:100%;padding:10px;margin:5px 0;border:1px solid #ddd;border-radius:4px;box-sizing:border-box}button{background:#673ab7;color:#fff;border:none;cursor:pointer}button:hover{background:#512da8}.back{background:#6c757d}.success{color:#28a745}.error{color:#dc3545}#px{display:none;margin-top:20px;background:#e9ecef;border-radius:4px}#pb{height:20px;background:#673ab7;width:0%;border-radius:4px;color:#fff;text-align:center;font-size:12px;line-height:20px;transition:width .2s}</style>"));
+    configServer.sendContent(F("<script>function up(e){e.preventDefault();var i=document.getElementById('f'),b=document.getElementById('pb'),x=document.getElementById('px');if(!i.files.length)return alert('File?');var d=new FormData();d.append('update',i.files[0]);var r=new XMLHttpRequest();r.open('POST','/update_gateway',true);x.style.display='block';r.upload.onprogress=function(e){if(e.lengthComputable){var p=(e.loaded/e.total)*100;b.style.width=p+'%';b.innerText=Math.round(p)+'%'}};r.onload=function(){if(r.status==200){b.style.background='#28a745';b.innerText='Success! Rebooting...';setTimeout(function(){location.href='/'},15000)}else{x.style.display='none';alert('Err '+r.status)}};r.onerror=function(){x.style.display='none';alert('Net Err')};r.send(d)}</script>"));
+    configServer.sendContent(F("</head><body><div class='card'><h1>☁️ Gateway OTA</h1>"));
+    configServer.sendContent(F("<div style='background:#f8f9fa;padding:10px;border:1px solid #ddd;font-size:.9em;border-radius:4px;margin-bottom:20px'>"));
+    configServer.sendContent("<b>Current Version:</b> " + String(FIRMWARE_VERSION) + "<br>");
+    configServer.sendContent("<b>Build:</b> " + String(BUILD_DATE) + " " + String(BUILD_TIME) + "</div>");
+    configServer.sendContent(F("<h3>Upload Firmware (.bin)</h3><form onsubmit='up(event)'><input type='file' id='f' name='update' accept='.bin' required><button>📤 Update Gateway</button></form><div id='px'><div id='pb'>0%</div></div>"));
+    configServer.sendContent(F("<br><button class='back' onclick=\"location.href='/'\">⬅ Home</button></div></body></html>"));
+    configServer.sendContent(""); // Terminate chunked response
+}
+
+// -------------------------------------------------------------------------
+// API Handlers
+// -------------------------------------------------------------------------
+
+void handleApiNodesList() {
+    configServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    configServer.send(200, "application/json", "");
+    configServer.sendContent(F("{\"nodes\":["));
+    for (int i = 0; i < peerCount; i++) {
+        if (i > 0) configServer.sendContent(F(","));
+        String nodeJson = F("{");
+        char macStr[18];
+        snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 peerList[i].mac[0], peerList[i].mac[1], peerList[i].mac[2],
+                 peerList[i].mac[3], peerList[i].mac[4], peerList[i].mac[5]);
+        nodeJson += F("\"mac\":\""); nodeJson += macStr;
+        nodeJson += F("\",\"id\":\""); nodeJson += peerList[i].nodeId;
+        nodeJson += F("\",\"type\":\""); nodeJson += peerList[i].nodeType;
+        nodeJson += F("\",\"firmware\":\""); nodeJson += (strlen(peerList[i].firmwareVersion) > 0) ? peerList[i].firmwareVersion : "-";
+        nodeJson += F("\",\"online\":"); nodeJson += peerList[i].isOnline ? F("true") : F("false");
+        nodeJson += F("}");
+        configServer.sendContent(nodeJson);
+    }
+    configServer.sendContent(F("]}"));
+    configServer.sendContent(""); // Terminate chunked response
+}
+
+void handleApiNodeRestart() {
+    if (!configServer.hasArg("nodeId")) { configServer.send(400, "application/json", "{\"error\":\"Missing nodeId\"}"); return; }
+    String nodeId = configServer.arg("nodeId");
+    for (int i = 0; i < peerCount; i++) {
+        if (String(peerList[i].nodeId) == nodeId) {
+            espNow.send(peerList[i].mac, peerList[i].nodeId, "CONTROL", "RESTART", "", "COMMAND", gateway_id);
+            configServer.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Restart command sent\"}");
+            return;
+        }
+    }
+    configServer.send(404, "application/json", "{\"error\":\"Node not found\"}");
+}
+
+void handleApiNodeReset() {
+    if (!configServer.hasArg("nodeId")) { configServer.send(400, "application/json", "{\"error\":\"Missing nodeId\"}"); return; }
+    String nodeId = configServer.arg("nodeId");
+    for (int i = 0; i < peerCount; i++) {
+        if (String(peerList[i].nodeId) == nodeId) {
+            espNow.send(peerList[i].mac, peerList[i].nodeId, "CONTROL", "RESET_WIFI", "", "COMMAND", gateway_id);
+            configServer.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Reset WiFi command sent\"}");
+            return;
+        }
+    }
+    configServer.send(404, "application/json", "{\"error\":\"Node not found\"}");
+}
+
+void handleApiPingNode() {
+    if (!configServer.hasArg("nodeId")) { configServer.send(400, "application/json", "{\"error\":\"Missing nodeId\"}"); return; }
+    String targetNodeId = configServer.arg("nodeId");
+    for (int i = 0; i < peerCount; i++) {
+        if (String(peerList[i].nodeId) == targetNodeId) {
+            espNow.send(peerList[i].mac, peerList[i].nodeId, "CONTROL", "PING", "REQUEST", "COMMAND", gateway_id);
+            configServer.send(200, "application/json", "{\"status\":\"ping_sent\"}");
+            return;
+        }
+    }
+    configServer.send(404, "application/json", "{\"error\":\"Node not found\"}");
+}
+
+void handleApiNodeStatus() {
+    if (!configServer.hasArg("nodeId")) { configServer.send(400, "application/json", "{\"error\":\"Missing nodeId\"}"); return; }
+    String targetNodeId = configServer.arg("nodeId");
+    for (int i = 0; i < peerCount; i++) {
+        if (String(peerList[i].nodeId) == targetNodeId) {
+            String json = "{";
+            json += "\"id\":\"" + String(peerList[i].nodeId) + "\",";
+            json += "\"online\":" + String(peerList[i].isOnline ? "true" : "false") + ",";
+            json += "\"version\":\"" + String(peerList[i].firmwareVersion) + "\"";
+            json += "}";
+            configServer.send(200, "application/json", json);
+            return;
+        }
+    }
+    configServer.send(404, "application/json", "{\"error\":\"Node not found\"}");
+}
+
+void handleApiForceHaDiscovery() {
+    configServer.sendHeader("Access-Control-Allow-Origin", "*");
+    
+    if (!mqttClient.connected()) {
+        configServer.send(500, "application/json", "{\"error\":\"MQTT Not Connected\"}");
+        return;
+    }
+
+    String targetNodeId = "";
+    if (configServer.hasArg("nodeId")) {
+        targetNodeId = configServer.arg("nodeId");
+    }
+
+    int count = 0;
+    for (int i = 0; i < peerCount; i++) {
+        if (targetNodeId.length() == 0 || String(peerList[i].nodeId) == targetNodeId) {
+            // Force full discovery
+            HaDiscovery::publishDiscovery(mqttClient, peerList[i], mqtt_topic_prefix);
+            HaDiscovery::publishDashboardConfig(mqttClient, peerList[i], mqtt_topic_prefix);
+            
+            // Force status update to ensure availability is online
+            publishPeerStatus(i, "FORCE_DISCOVERY");
+            
+            count++;
+        }
+    }
+
+    if (count > 0) {
+        configServer.send(200, "application/json", "{\"status\":\"ok\", \"count\":" + String(count) + "}");
+    } else {
+        configServer.send(404, "application/json", "{\"error\":\"Node not found\"}");
+    }
+}
+
+void handleNetworkDiscovery() {
+    networkDiscoveryActive = true;
+    networkDiscoveryStartTime = millis();
+    
+    // Invia broadcast discovery per nuovi nodi o nodi esistenti
+    uint8_t broadcastMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    espNow.send(broadcastMac, "GATEWAY", "DISCOVERY", "DISCOVERY", "REQUEST", "DISCOVERY", gateway_id);
+    
+    // For known peers, refresh HA Discovery immediately
+    if (mqttConnected) {
+        int refreshed = 0;
+        for (int i = 0; i < peerCount; i++) {
+            mqttClient.loop(); // Keep alive
+            HaDiscovery::publishDiscovery(mqttClient, peerList[i], mqtt_topic_prefix, true); // Force RESET
+            HaDiscovery::publishDashboardConfig(mqttClient, peerList[i], mqtt_topic_prefix);
+            refreshed++;
+        }
+        DevLog.printf("Discovery refresh sent for %d known peers\n", refreshed);
+    }
+    
+    configServer.send(200, "application/json", "{\"message\":\"Discovery started\"}");
+}
+
+void handlePingNetwork() {
+    pingNetworkActive = true;
+    pingNetworkStartTime = millis();
+    pingResponseCount = 0;
+    memset(pingResponseReceived, 0, sizeof(pingResponseReceived));
+    // Copy peers to ping list
+    for (int i = 0; i < peerCount; i++) {
+        memcpy(pingedNodesMac[i], peerList[i].mac, 6);
+        espNow.send(peerList[i].mac, peerList[i].nodeId, "CONTROL", "PING", "REQUEST", "COMMAND", gateway_id);
+    }
+    pingResponseCount = peerCount;
+    configServer.send(200, "application/json", "{\"message\":\"Ping network started\"}");
+}
+
 // -------------------------------------------------------------------------
 // Action Handlers
 // -------------------------------------------------------------------------
@@ -687,6 +884,120 @@ void handleReboot() {
     configServer.send(200, "text/plain", "Rebooting...");
     delay(1000);
     ESP.restart();
+}
+
+void handleDeleteNode() {
+    if (configServer.hasArg("mac")) {
+        String macStr = configServer.arg("mac");
+        removePeer(macStr.c_str());
+        configServer.send(200, "application/json", "{\"message\":\"Node removed\"}");
+    } else {
+        configServer.send(400, "application/json", "{\"error\":\"Missing MAC\"}");
+    }
+}
+
+void handleApiOtaStatus() {
+    StaticJsonDocument<512> doc;
+    doc["nodeId"] = globalOtaStatus.nodeId;
+    doc["status"] = globalOtaStatus.status;
+    doc["timestamp"] = globalOtaStatus.timestamp;
+    doc["lastMessage"] = globalOtaStatus.lastMessage;
+    doc["progress"] = globalOtaStatus.progress;
+    
+    String json;
+    serializeJson(doc, json);
+    configServer.send(200, "application/json", json);
+}
+
+void handleTriggerOta() {
+    configServer.sendHeader("Access-Control-Allow-Origin", "*");
+    configServer.sendHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE");
+    configServer.sendHeader("Access-Control-Allow-Headers", "Content-Type, Content-Length, X-Requested-With");
+    configServer.sendHeader("Access-Control-Max-Age", "86400");
+
+    if (!configServer.hasArg("nodeId")) {
+        configServer.send(400, "text/plain", "Missing nodeId");
+        return;
+    }
+    String nodeId = configServer.arg("nodeId");
+    
+    // Get Firmware URL from request (provided by Dashboard)
+    String url = configServer.hasArg("url") ? configServer.arg("url") : "";
+    if (url.length() == 0) {
+        configServer.send(400, "text/plain", "Missing firmware URL");
+        return;
+    }
+
+    // Reset global status
+    globalOtaStatus.nodeId = nodeId;
+    globalOtaStatus.status = "TRIGGERED";
+    globalOtaStatus.timestamp = millis();
+    globalOtaStatus.lastMessage = "Invio comando OTA...";
+    globalOtaStatus.progress = 0;
+
+    // Find peer
+    for (int i = 0; i < peerCount; i++) {
+        if (String(peerList[i].nodeId) == nodeId) {
+            // Construct payload: SSID|PASS|URL
+            String ssid = WiFi.SSID();
+            String pass = WiFi.psk();
+            
+            // Fallback to saved config if WiFi.SSID/PSK is empty
+            if (ssid.length() == 0) ssid = String(saved_wifi_ssid);
+            if (pass.length() == 0) pass = String(saved_wifi_password);
+            
+            // Ultimo tentativo: usa la password globale hardcoded se disponibile
+            if (pass.length() == 0 && wifi_password != nullptr) {
+                 pass = String(wifi_password);
+            }
+
+            String payload = ssid + "|" + pass + "|" + url;
+            
+            // Mask password for debug log
+            String maskedPass = (pass.length() > 0) ? (String(pass.charAt(0)) + "****" + String(pass.charAt(pass.length()-1))) : "EMPTY";
+
+            DevLog.printf("[OTA] Triggering OTA for %s\n", nodeId.c_str());
+            DevLog.printf("[OTA] Payload: SSID=%s, PASS=%s (Len:%d), URL=%s\n", ssid.c_str(), maskedPass.c_str(), pass.length(), url.c_str());
+            DevLog.printf("[OTA] Gateway ID used for command: '%s' (Address: %p)\n", gateway_id, gateway_id);
+
+            // Send OTA_UPDATE command with payload
+            espNow.send(peerList[i].mac, peerList[i].nodeId, "CONTROL", "OTA_UPDATE", payload.c_str(), "COMMAND", gateway_id);
+            
+            configServer.send(200, "application/json", "{\"status\":\"ok\"}");
+            return;
+        }
+    }
+    configServer.send(404, "text/plain", "Node not found");
+}
+
+void handleGatewayUpdate() {
+    HTTPUpload& upload = configServer.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+        otaRunning = true; // Stop other tasks
+        WiFiUDP::stopAll();
+        uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
+        if (!Update.begin(maxSketchSpace)) {
+            Update.printError(Serial);
+            otaRunning = false;
+        }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (otaRunning) {
+            if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+                Update.printError(Serial);
+                otaRunning = false;
+            }
+        }
+    } else if (upload.status == UPLOAD_FILE_END) {
+        if (otaRunning) {
+            if (Update.end(true)) {
+                DevLog.println("Update Success! Finishing...");
+            } else {
+                Update.printError(Serial);
+            }
+            otaRunning = false;
+        }
+    }
+    yield(); // Avoid watchdog timeout
 }
 
 // -------------------------------------------------------------------------

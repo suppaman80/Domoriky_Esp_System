@@ -119,10 +119,12 @@ void processMessageQueue() {
         bool isBroadcast = (strcmp(receivedData.gateway_id, "ALL") == 0 || strcmp(receivedData.gateway_id, "") == 0);
     
         if (isForThisGateway || isDiscovery || isBroadcast) {
-            // Always update lastSeen for any received message
-            for (int i = 0; i < peerCount; i++) {
-                if (memcmp(peerList[i].mac, msg.mac, 6) == 0) {
-                    // Detect state change from OFFLINE to ONLINE
+        // Always update lastSeen for any received message
+        bool peerFound = false;
+        for (int i = 0; i < peerCount; i++) {
+            if (memcmp(peerList[i].mac, msg.mac, 6) == 0) {
+                peerFound = true;
+                // Detect state change from OFFLINE to ONLINE
                     bool wasOffline = !peerList[i].isOnline;
                     
                     peerList[i].isOnline = true;
@@ -195,7 +197,13 @@ void processMessageQueue() {
             if (strcmp(receivedData.type, "FEEDBACK") == 0 && strcmp(receivedData.command, "OTA_UPDATE") == 0) {
                  DevLog.printf("OTA FEEDBACK Received: Node=%s, Status=%s, TargetGateway=%s\n", receivedData.node, receivedData.status, receivedData.gateway_id);
                  
-                 // Global OTA status tracking removed (Instrumentation removal)
+                 // Update global status regardless of nodeId match if we are in a triggered state
+                 // This ensures we catch the feedback even if there are case/format discrepancies
+                 if (globalOtaStatus.status == "TRIGGERED" || globalOtaStatus.status == "OTA_STARTING" || globalOtaStatus.status == "OTA_PROGRESS") {
+                      globalOtaStatus.status = receivedData.status;
+                      globalOtaStatus.lastMessage = "Node Response (" + String(receivedData.node) + "): " + String(receivedData.status);
+                      globalOtaStatus.timestamp = millis();
+                 }
             }
     
             // Handle REGISTER command - Relaxed check
@@ -217,7 +225,16 @@ void processMessageQueue() {
     
                     DevLog.printf("📝 REGISTRATION parsed - Type: %s, Version: %s\n", typeStr.c_str(), versionStr.c_str());
     
-                    // OTA COMPLETION CHECK removed (Instrumentation removal)
+                    // OTA COMPLETION CHECK
+                    // Check if this registration completes a pending OTA for this node
+                    if ((globalOtaStatus.status == "TRIGGERED" || globalOtaStatus.status == "OTA_STARTING" || globalOtaStatus.status == "OTA_PROGRESS") && 
+                        String(receivedData.node) == globalOtaStatus.nodeId) {
+                        
+                        globalOtaStatus.status = "SUCCESS";
+                        globalOtaStatus.lastMessage = "Aggiornamento completato! Nuova Versione: " + versionStr;
+                        globalOtaStatus.timestamp = millis();
+                        DevLog.println("✅ OTA SUCCESS confirmed via REGISTRATION");
+                    }
     
                     // Check if node is already registered with same type
                     bool alreadyRegistered = false;
@@ -231,21 +248,26 @@ void processMessageQueue() {
                             peerList[i].lastSeen = millis();
                             peerList[i].isOnline = true;
                             
-                            // Always save/update if found, to ensure type is correct
-                            if (!alreadyRegistered || versionStr.length() > 0) {
-                                 savePeer(msg.mac, receivedData.node, typeStr.c_str(), versionStr.c_str());
-                            }
-                            alreadyRegistered = true; // Mark as handled
-                            break;
+                            // Se è una risposta al discovery, forziamo il refresh del discovery MQTT
+                        // Questo gestisce il caso in cui il nodo è stato cancellato da HA
+                        if (!alreadyRegistered || versionStr.length() > 0) {
+                             savePeer(msg.mac, receivedData.node, typeStr.c_str(), versionStr.c_str(), true);
+                        } else {
+                             // Anche se già registrato e nessun cambiamento, forziamo discovery
+                             savePeer(msg.mac, receivedData.node, typeStr.c_str(), versionStr.c_str(), true);
                         }
-                    }
-                    
-                    if (!alreadyRegistered) {
-                        savePeer(msg.mac, receivedData.node, typeStr.c_str(), versionStr.c_str());
+                        
+                        alreadyRegistered = true; // Mark as handled
+                        break;
                     }
                 }
-            } else if (strcmp(receivedData.type, "DISCOVERY") == 0 && 
-                             strcmp(receivedData.command, "REQUEST") == 0) {
+                
+                if (!alreadyRegistered) {
+                    savePeer(msg.mac, receivedData.node, typeStr.c_str(), versionStr.c_str(), true);
+                }
+            }
+        } else if (strcmp(receivedData.type, "DISCOVERY") == 0 && 
+                         strcmp(receivedData.command, "REQUEST") == 0) {
                       // DISCOVERY REQUEST: aggiorna lastSeen e marca come online
                       for (int i = 0; i < peerCount; i++) {
                           if (memcmp(peerList[i].mac, msg.mac, 6) == 0) {
@@ -330,34 +352,77 @@ void processMessageQueue() {
                       }
             } else if (strcmp(receivedData.type, "DISCOVERY") == 0 && 
                              strcmp(receivedData.command, "DISCOVERY_RESPONSE") == 0) {
+                 
+                 // Parse "TYPE|VERSION" from status
+                 String statusStr = String(receivedData.status);
+                 String typeStr = "";
+                 String versionStr = "";
+                 int pipeIndex = statusStr.indexOf('|');
+                 
+                 if (pipeIndex != -1) {
+                     typeStr = statusStr.substring(0, pipeIndex);
+                     versionStr = statusStr.substring(pipeIndex + 1);
+                 } else {
+                     if (statusStr.length() > 0 && statusStr != "AVAILABLE") {
+                         typeStr = statusStr;
+                     }
+                 }
+
                  // Handle discovery response
-                 // Check if node is known
                  bool known = false;
                  for (int i = 0; i < peerCount; i++) {
                      if (memcmp(peerList[i].mac, msg.mac, 6) == 0) {
                          known = true;
                          peerList[i].lastSeen = millis();
                          peerList[i].isOnline = true;
+                         
+                         // Use existing nodeType if the received one is empty/generic/unknown
+                         const char* targetType = (typeStr.length() > 0 && typeStr != "GENERIC" && typeStr != "UNKNOWN") ? typeStr.c_str() : peerList[i].nodeType;
+                         
+                         // Force update/discovery for known nodes (re-sends MQTT config)
+                         savePeer(msg.mac, receivedData.node, targetType, versionStr.c_str(), true);
+                         
                          break;
                      }
                  }
                  
                  if (!known) {
                      DevLog.println("✨ New node discovered via response!");
-                     // Use default type/version, will be updated with REGISTRATION
-                     savePeer(msg.mac, receivedData.node, "UNKNOWN", ""); 
+                     savePeer(msg.mac, receivedData.node, typeStr.c_str(), versionStr.c_str(), true); 
+                     
+                     if (typeStr == "" || typeStr == "UNKNOWN") {
+                         DevLog.println("⚠️ New Node (Unknown Type). Forcing RESTART to register.");
+                         espNow.send(msg.mac, gateway_id, "CONTROL", "RESTART", "0", "", "");
+                     }
                  }
             } else {
                  // Per tutti gli altri messaggi, usa solo nodeId (senza cambiare nodeType)
                  // Aggiorna anche lo stato online poiché il nodo sta comunicando attivamente
+                 bool known = false;
                  for (int i = 0; i < peerCount; i++) {
                      if (memcmp(peerList[i].mac, msg.mac, 6) == 0) {
                          peerList[i].isOnline = true;
                          peerList[i].lastSeen = millis();
+                         
+                         // Check if known peer has missing type
+                         if (strlen(peerList[i].nodeType) == 0 || strcmp(peerList[i].nodeType, "UNKNOWN") == 0) {
+                             DevLog.println("⚠️ Known Node with missing Type. Forcing RESTART to re-register.");
+                             espNow.send(msg.mac, gateway_id, "CONTROL", "RESTART", "0", "", "");
+                         }
+                         
+                         known = true;
                          break;
                      }
                  }
-                 savePeer(msg.mac, receivedData.node, "", ""); // Use empty strings for optional params
+                 
+                 if (!known) {
+                      // Just register as unknown, don't try to guess type from status
+                      savePeer(msg.mac, receivedData.node, "", "", true); 
+                      
+                      // Force Restart to ensure proper Registration and Type detection
+                      DevLog.println("⚠️ New Node (Unknown Type) detected via generic msg. Forcing RESTART to register.");
+                      espNow.send(msg.mac, gateway_id, "CONTROL", "RESTART", "0", "", "");
+                 }
             }
             
             // Send to MQTT

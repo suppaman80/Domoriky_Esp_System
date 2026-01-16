@@ -1,7 +1,7 @@
 #include "HaDiscovery.h"
 #include "WebLog.h"
 
-void HaDiscovery::publishDiscovery(PubSubClient& client, const Peer& peer, const char* topicPrefix) {
+void HaDiscovery::publishDiscovery(PubSubClient& client, const Peer& peer, const char* topicPrefix, bool resetFirst) {
     if (strlen(peer.nodeId) == 0 || strcmp(peer.nodeId, "null") == 0) {
         DevLog.println("⚠️ HaDiscovery: Ignorato peer con ID vuoto o nullo");
         return;
@@ -11,7 +11,7 @@ void HaDiscovery::publishDiscovery(PubSubClient& client, const Peer& peer, const
     int count = NodeTypeManager::getNodeConfig(peer.nodeType, entities, 8);
 
     if (count > 0) {
-        publishGenericDiscovery(client, peer, topicPrefix, entities, count);
+        publishGenericDiscovery(client, peer, topicPrefix, entities, count, resetFirst);
     } else {
         DevLog.printf("⚠️ HaDiscovery: Tipo nodo non supportato per discovery: %s (ID: %s)\n", peer.nodeType, peer.nodeId);
     }
@@ -49,15 +49,24 @@ void HaDiscovery::publishDashboardConfig(PubSubClient& client, const Peer& peer,
     }
 }
 
-void HaDiscovery::publishGenericDiscovery(PubSubClient& client, const Peer& peer, const char* topicPrefix, NodeEntity* entities, int count) {
+void HaDiscovery::publishGenericDiscovery(PubSubClient& client, const Peer& peer, const char* topicPrefix, NodeEntity* entities, int count, bool resetFirst) {
     String nodeIdStr = String(peer.nodeId);
     
     // Configurazione comune
     DynamicJsonDocument doc(1024);
-    doc["device"]["identifiers"][0] = String("domoriky_") + nodeIdStr;
-    doc["device"]["name"] = nodeIdStr;
-    doc["device"]["model"] = String(peer.nodeType);
-    doc["device"]["manufacturer"] = String("Domoriky");
+    
+    // Device Configuration - Use explicit object creation for safety
+    JsonObject device = doc.createNestedObject("device");
+    JsonArray identifiers = device.createNestedArray("identifiers");
+    identifiers.add(String("domoriky_") + nodeIdStr);
+    
+    device["name"] = nodeIdStr;
+    device["model"] = String(peer.nodeType);
+    device["manufacturer"] = "Domoriky";
+    if (strlen(peer.firmwareVersion) > 0) {
+        device["sw_version"] = String(peer.firmwareVersion);
+    }
+    
     doc["state_topic"] = String(topicPrefix) + String("/nodo/status");
     
     // Availability configuration
@@ -75,6 +84,8 @@ void HaDiscovery::publishGenericDiscovery(PubSubClient& client, const Peer& peer
     doc["command_topic"] = String(topicPrefix) + String("/nodo/command");
     
     for (int i = 0; i < count; i++) {
+        client.loop(); // Mantieni viva la connessione e svuota i buffer
+        
         DynamicJsonDocument c(1024);
         // Copia configurazione base
         for (JsonPair kv : doc.as<JsonObject>()) { c[kv.key()] = kv.value(); }
@@ -103,9 +114,24 @@ void HaDiscovery::publishGenericDiscovery(PubSubClient& client, const Peer& peer
         c["value_template"] = getValueTemplate(nodeIdStr, entities[i].attributeIndex, entities[i].component);
         
         String cfgTopic = String("homeassistant/") + entities[i].component + "/" + nodeIdStr + "_" + entities[i].suffix + "/config";
+        
+        // SE richiesto reset, invia prima payload vuoto per forzare rimozione su HA
+        if (resetFirst) {
+            DevLog.printf("🔄 Resetting HA config for: %s\n", cfgTopic.c_str());
+            client.publish(cfgTopic.c_str(), "", true);
+            delay(20);
+            client.loop();
+        }
+
         String payload;
         serializeJson(c, payload);
-        client.publish(cfgTopic.c_str(), payload.c_str(), true);
+        
+        if (client.publish(cfgTopic.c_str(), payload.c_str(), true)) {
+            DevLog.printf("✅ Discovery Sent: %s (Topic: %s)\n", entities[i].name, cfgTopic.c_str());
+        } else {
+            DevLog.printf("❌ Discovery FAILED: %s (Topic: %s)\n", entities[i].name, cfgTopic.c_str());
+        }
+        delay(20); // Piccolo ritardo per non saturare
     }
     
     // Pubblica availability corrente del nodo (retained) sul topic dedicato

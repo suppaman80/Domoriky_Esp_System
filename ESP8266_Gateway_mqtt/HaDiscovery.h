@@ -9,10 +9,11 @@
 
 class HaDiscovery {
 public:
-    static void publishDiscovery(PubSubClient& client, const Peer& peer, const char* topicPrefix);
+    static void publishDiscovery(PubSubClient& client, const Peer& peer, const char* topicPrefix, bool resetFirst = false);
     static void publishDashboardConfig(PubSubClient& client, const Peer& peer, const char* topicPrefix);
+
 private:
-    static void publishGenericDiscovery(PubSubClient& client, const Peer& peer, const char* topicPrefix, NodeEntity* entities, int count);
+    static void publishGenericDiscovery(PubSubClient& client, const Peer& peer, const char* topicPrefix, NodeEntity* entities, int count, bool resetFirst);
     static String getCommandTemplate(const String& nodeId, const String& topic, const char* component);
     static String getValueTemplate(const String& nodeId, int attrIndex, const char* component);
 };

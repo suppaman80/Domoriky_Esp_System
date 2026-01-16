@@ -63,10 +63,15 @@ void onMqttConnect() {
 
     // Pubblica discovery per tutti i peer conosciuti
     for (int i = 0; i < peerCount; i++) {
+        // 1. Configurazione Home Assistant
         HaDiscovery::publishDiscovery(mqttClient, peerList[i], mqtt_topic_prefix);
         HaDiscovery::publishDashboardConfig(mqttClient, peerList[i], mqtt_topic_prefix);
         
-        // NEW: Publish current state immediately to remove "lightning bolt" icon
+        // 2. Forza Availability ONLINE (Fondamentale al riavvio)
+        String availTopic = String(mqtt_topic_prefix) + "/nodo/" + String(peerList[i].nodeId) + "/availability";
+        mqttClient.publish(availTopic.c_str(), "online", true);
+
+        // 3. Pubblica stato attuale
         publishPeerStatus(i, "HEARTBEAT"); 
         
         // Piccolo delay per evitare buffer overflow durante l'invio massivo
@@ -320,6 +325,12 @@ void publishPeerStatus(int i, const char* command) {
     
     peerDoc["mac"] = macStr;
     peerDoc["nodeId"] = strlen(peerList[i].nodeId) > 0 ? peerList[i].nodeId : macStr;
+    
+    // --- HA COMPATIBILITY FIELDS ---
+    // HaDiscovery expects "Node" (PascalCase) matching nodeId
+    peerDoc["Node"] = peerDoc["nodeId"]; 
+    // -------------------------------
+
     peerDoc["nodeType"] = strlen(peerList[i].nodeType) > 0 ? peerList[i].nodeType : "UNKNOWN";
     peerDoc["firmwareVersion"] = strlen(peerList[i].firmwareVersion) > 0 ? peerList[i].firmwareVersion : "UNKNOWN";
     peerDoc["attributes"] = strlen(peerList[i].attributes) > 0 ? peerList[i].attributes : "";
@@ -534,15 +545,6 @@ void processMqttCommand(const String& msgStr) {
             return;
         }
         
-        // Comando NETWORK_DISCOVERY
-        if (command == "NETWORK_DISCOVERY") {
-            // Invia discovery broadcast
-            uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-            espNow.send(broadcastAddress, "GATEWAY", "DISCOVERY", "DISCOVERY", "REQUEST", "DISCOVERY", gateway_id);
-            
-            return;
-        }
-        
         // NOTA: Il comando NODE_REBOOT è ora gestito nella funzione processNodeCommand
         // per essere inviato al topic corretto: domoriky/nodo/command
         
@@ -737,13 +739,33 @@ void processMqttCommand(const String& msgStr) {
         if (command == "NETWORK_DISCOVERY") {
             DevLog.println("RICEVUTO - Comando: NETWORK_DISCOVERY");
             
-            // Network discovery avviato - nessun messaggio MQTT di conferma
-            
-            // NON resettare lo stato online - lasciare che i nodi rispondano e rimangano online
-            // Solo i nodi che non rispondono verranno marcati offline dal timeout naturale
-            
-            // Invia SOLO richiesta di discovery broadcast per trovare nuovi nodi
-            // NON inviare discovery individuali ai peer esistenti per evitare duplicazioni
+            // 1. Invia IMMEDIATAMENTE la configurazione a HA per tutti i nodi noti
+            // Questo allinea il comportamento a quello dell'avvio (onMqttConnect)
+            int refreshed = 0;
+
+            // Ensure Gateway Availability is ONLINE (Critical for HA Discovery availability_topic)
+            String gatewayAvailTopic = String(mqtt_topic_prefix) + "/gateway/availability";
+            mqttClient.publish(gatewayAvailTopic.c_str(), "online", true);
+
+            for (int i = 0; i < peerCount; i++) {
+                mqttClient.loop(); // Keep connection alive
+
+                // Publish Config (Discovery) - Force RESET to ensure HA picks it up
+                HaDiscovery::publishDiscovery(mqttClient, peerList[i], mqtt_topic_prefix, true);
+                HaDiscovery::publishDashboardConfig(mqttClient, peerList[i], mqtt_topic_prefix);
+                
+                // Publish Status and Availability
+                publishPeerStatus(i, "FORCE_DISCOVERY"); 
+                
+                // Force Availability to ONLINE explicitly
+                String availTopic = String(mqtt_topic_prefix) + "/nodo/" + String(peerList[i].nodeId) + "/availability";
+                mqttClient.publish(availTopic.c_str(), "online", true);
+
+                refreshed++;
+            }
+            DevLog.printf("Discovery MQTT: Refreshed %d known peers immediately\n", refreshed);
+
+            // 2. Invia richiesta di discovery broadcast per trovare nuovi nodi o risvegliare quelli esistenti
             uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
             espNow.send(broadcastAddress, "GATEWAY", "DISCOVERY", "DISCOVERY", "REQUEST", "DISCOVERY", gateway_id);
             

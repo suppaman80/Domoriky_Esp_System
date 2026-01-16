@@ -39,9 +39,9 @@ extern long gmt_offset_sec;
 extern int daylight_offset_sec;
 
 // --- TIMEOUT CONFIGURATION --- //
-const unsigned long NETWORK_DISCOVERY_TIMEOUT = 3000;
-const unsigned long PING_RESPONSE_TIMEOUT = 3000;
-const unsigned long NODE_OFFLINE_TIMEOUT = 1200000; // 20 minuti (4x heartbeat interval)
+const unsigned long NETWORK_DISCOVERY_TIMEOUT = 5000;  // Increased to 5s
+const unsigned long PING_RESPONSE_TIMEOUT = 10000;     // Increased to 10s (was 3s)
+const unsigned long NODE_OFFLINE_TIMEOUT = 2400000;    // Increased to 40 min (was 20 min)
 
 // Funzioni
 void loadConfigFromLittleFS();

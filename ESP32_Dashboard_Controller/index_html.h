@@ -167,7 +167,7 @@ h1 { margin: 0; font-size: 24px; color: var(--dark); }
 <span id="dashboard-update-container" style="display:none; margin-right: 5px;"></span>
 <button onclick="checkUpdates()" class="btn" style="background: #0dcaf0; color: black;" title="Controlla aggiornamenti online">☁️ Check Upd</button>
 <button class="btn" style="background: #6610f2; color: white;" onclick="document.getElementById('system-firmware').click()" title="Aggiornamento Firmware Dashboard Manuale">🚀 FW Upload</button>
-<button onclick="window.open('/debug', 'DebugWindow', 'width=800,height=600');" class="btn" style="background: #212529; color: white;">🖥️ Console</button>
+<button id="btn-console" onclick="window.open('/debug', 'DebugWindow', 'width=800,height=600');" class="btn" style="background: #212529; color: white;">🖥️ Console</button>
 <input type="file" id="system-firmware" accept=".bin" style="display: none" onchange="uploadSystemFirmware()">
 <input type="file" id="node-ota-file" accept=".bin" style="display: none" onchange="handleNodeOtaUpload()">
 </div>
@@ -861,6 +861,13 @@ document.getElementById('sys-fw').innerText = data.dashboard.version;
 document.getElementById('sys-ip').innerText = data.dashboard.ip || 'N/A';
 document.getElementById('sys-rssi').innerText = data.dashboard.wifiSignal || '0';
 document.getElementById('sys-mac').innerText = data.dashboard.mac || 'N/A';
+if (data.dashboard.isConfigMode) {
+    const btnConsole = document.getElementById('btn-console');
+    if (btnConsole) btnConsole.style.display = 'none';
+} else {
+    const btnConsole = document.getElementById('btn-console');
+    if (btnConsole) btnConsole.style.display = 'inline-block';
+}
 }
 }
 updateUI();
