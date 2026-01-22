@@ -32,6 +32,7 @@ void publishNodeAvailability(const String& nodeId, const char* availability);
 void publishToMQTT(const String& subtopic, const String& eventType, const String& message);
 void sendGatewayHeartbeat();
 void sendDashboardDiscovery();
+void triggerGlobalDiscovery();
 
 // External command processor
 void processMqttCommand(const String& msgStr);

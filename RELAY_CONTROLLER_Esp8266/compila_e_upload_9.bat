@@ -1,6 +1,6 @@
 @echo off
 echo =====================================
-echo 🔄 COMPILAZIONE
+echo 🔄 COMPILAZIONE E UPLOAD ESP8266
 echo =====================================
 echo.
 
@@ -17,7 +17,7 @@ echo.
 
 echo 📦 Fase 1: Compilazione...
 cd /d "%~dp0"
-arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 4_RELAY_CONTROLLER.ino --libraries ../libraries
+arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 RELAY_CONTROLLER_Esp8266.ino --libraries ../libraries --verbose
 
 if %errorlevel% neq 0 (
     echo ❌ Errore durante la compilazione!
@@ -26,6 +26,15 @@ if %errorlevel% neq 0 (
 )
 
 echo.
+echo 📤 Fase 2: Upload...
+arduino-cli upload -p COM3 --fqbn esp8266:esp8266:nodemcuv2 --upload-property upload.speed=921600 RELAY_CONTROLLER_Esp8266.ino
 
+if %errorlevel% neq 0 (
+    echo ❌ Errore durante l'upload!
+    pause
+    exit /b 1
+)
+
+echo.
 echo ✅ Operazione completata con successo!
 pause

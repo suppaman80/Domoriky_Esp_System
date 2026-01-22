@@ -31,6 +31,7 @@
 #include <LittleFS.h>
 #include <ESP8266httpUpdate.h>
 #include "version.h"
+#include "Settings.h"
 
 // Forward declaration
 void sendResponse(const uint8_t* requestorMac, const char* topic, const char* command, const char* status);
@@ -44,8 +45,8 @@ extern "C" {
 }
 
 // --- PIN CONFIGURATION ---
-// Pin configurabili - Default values
-int relayPins[4] = {12, 13, 14, 15};
+// Pin configurabili - Default values loaded from Settings.h
+int relayPins[MAX_RELAYS] = {DEFAULT_RELAY1_PIN, DEFAULT_RELAY2_PIN, DEFAULT_RELAY3_PIN, DEFAULT_RELAY4_PIN, DEFAULT_RELAY5_PIN, DEFAULT_RELAY6_PIN};
 
 #define LED_STATUS 2   // GPIO2 - LED di stato
 #define SETUP_PIN 0    // GPIO0 - Pin per modalità setup (con GND)
@@ -53,26 +54,20 @@ int relayPins[4] = {12, 13, 14, 15};
 // Helper per options HTML
 String getPinOptions(int selected) {
     String options = "";
-    struct PinDef { int gpio; const char* name; };
-    PinDef pins[] = {
-        {16, "GPIO 16 (D0)"},
-        {5, "GPIO 5 (D1)"},
-        {4, "GPIO 4 (D2)"},
-        {0, "GPIO 0 (D3)"},
-        {2, "GPIO 2 (D4)"},
-        {14, "GPIO 14 (D5)"},
-        {12, "GPIO 12 (D6)"},
-        {13, "GPIO 13 (D7)"},
-        {15, "GPIO 15 (D8)"},
-        {3, "GPIO 3 (RX)"},
-        {1, "GPIO 1 (TX)"}
-    };
     
-    for(int i=0; i<11; i++) {
-        options += "<option value='" + String(pins[i].gpio) + "'";
-        if(pins[i].gpio == selected) options += " selected";
-        options += ">" + String(pins[i].name) + "</option>";
+    // Option for Disabled
+    options += "<option value='" + String(PIN_DISABLED) + "'";
+    if (selected == PIN_DISABLED) options += " selected";
+    options += ">-- DISABLED --</option>";
+    
+    // Safe GPIOs defined in Settings.h
+    int numSafe = sizeof(SAFE_GPIOS) / sizeof(SAFE_GPIOS[0]);
+    for(int i=0; i<numSafe; i++) {
+        options += "<option value='" + String(SAFE_GPIOS[i]) + "'";
+        if(SAFE_GPIOS[i] == selected) options += " selected";
+        options += ">" + String(SAFE_GPIO_NAMES[i]) + "</option>";
     }
+    
     return options;
 }
 
@@ -80,27 +75,9 @@ String getPinOptions(int selected) {
 #define RELAY_ACTIVE_LOW false
 
 // --- CONFIGURAZIONE DEFAULT ---
-#define DEFAULT_NODE_ID "NODE_NAME"
-#define DEFAULT_GATEWAY_ID "GATEWAY_MAIN"
-
-// --- HARDCODED CONFIGURATION OVERRIDE ---
-// Decommentare per forzare la configurazione ed evitare la modalità AP
-//#define FORCE_CONFIG_OVERRIDE
-
-#ifdef FORCE_CONFIG_OVERRIDE
-  #define FORCE_NODE_ID       "CUCINA"   // <--- Inserisci qui il tuo ID NODO
-  #define FORCE_GATEWAY_ID    "GATEWAY_02"      // <--- Inserisci qui il tuo ID GATEWAY
-  // PIN dei Relè: D6, D7, D5, D8 (Standard Wemos D1 Mini / NodeMCU)
-  #define FORCE_RELAY_PIN_1   12
-  #define FORCE_RELAY_PIN_2   13
-  #define FORCE_RELAY_PIN_3   4
-  #define FORCE_RELAY_PIN_4   5
-#endif
-
-#define NODE_TYPE "4_RELAY_CONTROLLER"
-
-// --- CONFIGURAZIONE AP ---
-#define AP_SSID "Domoriky_4_RelayNode"
+// #define DEFAULT_NODE_ID "NODE_NAME"
+// #define DEFAULT_GATEWAY_ID "GATEWAY_MAIN"
+// #define AP_SSID "Domoriky_4_RelayNode"
 #define AP_PASSWORD ""  // Nessuna password per accesso libero
 #define CONFIG_TIMEOUT 300000  // 5 minuti timeout configurazione
 
@@ -144,7 +121,7 @@ bool gatewayConnectionLost = false;
 unsigned long lastGatewayMessage = 0;
 
 // Stati dei relè
-bool relayStates[4] = {false, false, false, false};
+bool relayStates[MAX_RELAYS]; // Initialized in setup to false
 
 // Variabili per gestione riavvio asincrono
 bool restartPending = false;
@@ -379,9 +356,11 @@ bool loadConfiguration() {
     // Carica PIN se presenti
     if (doc.containsKey("pins") && doc["pins"].is<JsonArray>()) {
         JsonArray pinArray = doc["pins"];
-        if (pinArray.size() >= 4) {
-            for(int i=0; i<4; i++) {
+        for(int i=0; i<MAX_RELAYS; i++) {
+            if (i < pinArray.size()) {
                 relayPins[i] = pinArray[i];
+            } else {
+                relayPins[i] = PIN_DISABLED;
             }
         }
     }
@@ -390,7 +369,7 @@ bool loadConfiguration() {
     Serial.print("Node ID: "); Serial.println(nodeId);
     Serial.print("Gateway ID: "); Serial.println(targetGatewayId);
     Serial.print("Pins: "); 
-    for(int i=0; i<4; i++) { Serial.print(relayPins[i]); Serial.print(" "); }
+    for(int i=0; i<MAX_RELAYS; i++) { Serial.print(relayPins[i]); Serial.print(" "); }
     Serial.println("\n===============================");
     
     return true;
@@ -407,7 +386,7 @@ bool saveConfiguration() {
     doc["gatewayId"] = targetGatewayId;
     
     JsonArray pinArray = doc.createNestedArray("pins");
-    for(int i=0; i<4; i++) {
+    for(int i=0; i<MAX_RELAYS; i++) {
         pinArray.add(relayPins[i]);
     }
     
@@ -461,7 +440,7 @@ void handleRoot() {
     
     html += "<div style='background:#f9f9f9;padding:10px;margin-top:10px;border-radius:5px;border:1px solid #eee;'>";
     html += "<h3 style='margin:5px 0 10px 0;color:#666'>Assegnazione GPIO Relè</h3>";
-    for(int i=0; i<4; i++) {
+    for(int i=0; i<MAX_RELAYS; i++) {
         html += "<label for='pin" + String(i) + "'>Relè " + String(i+1) + ":</label>";
         html += "<select name='pin" + String(i) + "' id='pin" + String(i) + "' style='width:100%;padding:10px;border:2px solid #ddd;border-radius:5px;font-size:16px;box-sizing:border-box;margin-bottom:10px;'>";
         html += getPinOptions(relayPins[i]);
@@ -486,10 +465,12 @@ void handleSave() {
         targetGatewayId.trim();
         
         // Leggi PIN dai parametri POST
-        for(int i=0; i<4; i++) {
+        for(int i=0; i<MAX_RELAYS; i++) {
             String argName = "pin" + String(i);
             if(server.hasArg(argName)) {
                 relayPins[i] = server.arg(argName).toInt();
+            } else {
+                relayPins[i] = PIN_DISABLED;
             }
         }
         
@@ -665,55 +646,84 @@ void handleControlCommand(uint8_t* senderMac, struct_message* msg) {
     processingCommand = true;
     
     bool commandExecuted = false;
-    const char* response = "UNKNOWN";
+    // Use String for response to handle dynamic content safely, convert to const char* only when sending
+    String responseStr = "UNKNOWN";
     
-    // Gestione relè (relay_1, relay_2, relay_3, relay_4)
+    // Gestione relè (relay_1, relay_2, relay_3, relay_4, relay_5, relay_6)
     if (strncmp(msg->topic, "relay_", 6) == 0) {
-        int relayIndex = msg->topic[6] - '1'; // Converte '1','2','3','4' in 0,1,2,3
+        int relayIndex = msg->topic[6] - '1'; // Converte '1','2','3','4','5','6' in 0,1,2,3,4,5
         
-        if (relayIndex >= 0 && relayIndex < 4) {
+        if (relayIndex >= 0 && relayIndex < MAX_RELAYS) {
             int command = atoi(msg->command); // Converte stringa in numero
             int relayPin = relayPins[relayIndex];
             
-            // Esegue il comando
-            switch (command) {
-                case 0: // OFF
-                    digitalWrite(relayPin, LOW);
-                    relayStates[relayIndex] = false;
-                    response = "OFF";
-                    commandExecuted = true;
-                    break;
-                    
-                case 1: // ON
-                    digitalWrite(relayPin, HIGH);
-                    relayStates[relayIndex] = true;
-                    response = "ON";
-                    commandExecuted = true;
-                    break;
-                    
-                case 2: // SWITCH
-                    relayStates[relayIndex] = !relayStates[relayIndex];
-                    digitalWrite(relayPin, relayStates[relayIndex] ? HIGH : LOW);
-                    response = relayStates[relayIndex] ? "ON" : "OFF";
-                    commandExecuted = true;
-                    break;
-                    
-                default:
-                    Serial.println("Comando non valido (usa 0=OFF, 1=ON, 2=SWITCH)");
-                    break;
+            // Verifica che il pin sia configurato
+            if (relayPin != PIN_DISABLED) {
+                // Esegue il comando
+                switch (command) {
+                    case 0: // OFF
+                        digitalWrite(relayPin, LOW);
+                        relayStates[relayIndex] = false;
+                        // Build Full Status Response (6 chars)
+                        responseStr = "";
+                        for(int i=0; i<MAX_RELAYS; i++) responseStr += relayStates[i] ? "1" : "0";
+                        commandExecuted = true;
+                        break;
+                        
+                    case 1: // ON
+                        digitalWrite(relayPin, HIGH);
+                        relayStates[relayIndex] = true;
+                        // Build Full Status Response (6 chars)
+                        responseStr = "";
+                        for(int i=0; i<MAX_RELAYS; i++) responseStr += relayStates[i] ? "1" : "0";
+                        commandExecuted = true;
+                        break;
+                        
+                    case 2: // SWITCH
+                        relayStates[relayIndex] = !relayStates[relayIndex];
+                        digitalWrite(relayPin, relayStates[relayIndex] ? HIGH : LOW);
+                        // Build Full Status Response (6 chars)
+                        responseStr = "";
+                        for(int i=0; i<MAX_RELAYS; i++) responseStr += relayStates[i] ? "1" : "0";
+                        commandExecuted = true;
+                        break;
+                        
+                    default:
+                        Serial.println("Comando non valido (usa 0=OFF, 1=ON, 2=SWITCH)");
+                        break;
+                }
+            } else {
+                 Serial.printf("Comando per relay %d ignorato (PIN_DISABLED)\n", relayIndex+1);
             }
         }
     }
     // Comandi di sistema
     else if (strcmp(msg->topic, "Life") == 0) {
-        response = "ALIVE";
+        responseStr = "ALIVE";
         commandExecuted = true;
     }
     // Gestione PING di heartbeat dal gateway - RISPONDE CON PONG
     else if (strcmp(msg->topic, "CONTROL") == 0 && strcmp(msg->command, "PING") == 0) {
         // Risponde con PONG
         String relayStatus = "";
-        for(int i=0; i<4; i++) relayStatus += relayStates[i] ? "1" : "0";
+        
+        // Calcola il numero di canali attivi
+        int activeChannels = 0;
+        for(int i=0; i<MAX_RELAYS; i++) {
+            if (relayPins[i] != PIN_DISABLED) {
+                activeChannels++;
+            }
+        }
+        
+        // Costruisci stringa stato con lunghezza corretta (solo canali attivi o fino al max configurato)
+        // Se activeChannels è 6, invia 6 char. Se è 4, invia 4 char.
+        // Se usiamo sempre MAX_RELAYS (6) e mettiamo '0' per i disabilitati, il gateway riceverà sempre 6 char
+        // che è corretto per un nodo definito come RL_CTRL_ESP8266_6CH
+        for(int i=0; i<MAX_RELAYS; i++) {
+             // Se il pin è disabilitato, mettiamo '0' (OFF) come placeholder
+             relayStatus += relayStates[i] ? "1" : "0";
+        }
+        
         String statusWithVersion = "ALIVE|" + String(FIRMWARE_VERSION) + "|" + relayStatus;
         sendResponse(senderMac, "CONTROL", "PONG", statusWithVersion.c_str());
         processingCommand = false;
@@ -741,7 +751,7 @@ void handleControlCommand(uint8_t* senderMac, struct_message* msg) {
     }
     // Comando RESTART - riavvia il nodo
     else if (strcmp(msg->topic, "CONTROL") == 0 && strcmp(msg->command, "RESTART") == 0) {
-        response = "RESTARTING";
+        responseStr = "RESTARTING";
         commandExecuted = true;
         
         sendResponse(senderMac, "CONTROL", "RESTART", "RESTARTING");
@@ -752,7 +762,7 @@ void handleControlCommand(uint8_t* senderMac, struct_message* msg) {
     }
     // Comando FACTORY_RESET - resetta la configurazione e riavvia in modalità AP
     else if (strcmp(msg->topic, "CONTROL") == 0 && strcmp(msg->command, "FACTORY_RESET") == 0) {
-        response = "RESETTING";
+        responseStr = "RESETTING";
         commandExecuted = true;
         
         Serial.println("⚠️ COMANDO FACTORY_RESET RICEVUTO VIA ESP-NOW!");
@@ -778,7 +788,7 @@ void handleControlCommand(uint8_t* senderMac, struct_message* msg) {
             otaPass = payload.substring(firstPipe + 1, secondPipe);
             otaUrl = payload.substring(secondPipe + 1);
             
-            response = "OTA_STARTING";
+            responseStr = "OTA_STARTING";
             commandExecuted = true;
             
             sendResponse(senderMac, "CONTROL", "OTA_UPDATE", "OTA_STARTING");
@@ -786,14 +796,14 @@ void handleControlCommand(uint8_t* senderMac, struct_message* msg) {
             otaPending = true;
             otaStartTime = millis() + 1000; // Avvio tra 1 secondo per dare tempo all'invio del feedback
         } else {
-             response = "OTA_INVALID_PAYLOAD";
+             responseStr = "OTA_INVALID_PAYLOAD";
              commandExecuted = true;
              sendResponse(senderMac, "CONTROL", "OTA_UPDATE", "INVALID_PAYLOAD");
         }
     }
     // Comando SLEEP_STATUS - mostra informazioni sullo stato di sleep
     else if (strcmp(msg->topic, "CONTROL") == 0 && strcmp(msg->command, "SLEEP_STATUS") == 0) {
-        response = "SLEEP_INFO";
+        responseStr = "SLEEP_INFO";
         commandExecuted = true;
         Serial.println("SLEEP_STATUS ricevuto - Invio informazioni power management...");
         
@@ -804,7 +814,7 @@ void handleControlCommand(uint8_t* senderMac, struct_message* msg) {
     }
     // Comando NETWORK_DISCOVERY - forza un nuovo discovery
     else if (strcmp(msg->topic, "CONTROL") == 0 && strcmp(msg->command, "NETWORK_DISCOVERY") == 0) {
-        response = "DISCOVERY_STARTED";
+        responseStr = "DISCOVERY_STARTED";
         commandExecuted = true;
         Serial.println("NETWORK_DISCOVERY ricevuto - Avvio discovery...");
         
@@ -830,12 +840,14 @@ void handleControlCommand(uint8_t* senderMac, struct_message* msg) {
             
             // Rispondi direttamente al richiedente con i dettagli del nodo
             // Formato: NODE_TYPE|CHANNELS
-            String myInfo = String(NODE_TYPE) + "|" + String(sizeof(relayPins)/sizeof(relayPins[0])) + "CH";
+            int activeCh = 0;
+            for(int i=0; i<MAX_RELAYS; i++) if(relayPins[i] != PIN_DISABLED) activeCh++;
+            String myInfo = String(NODE_TYPE) + "_" + String(activeCh) + "CH";
             
             sendResponse(senderMac, "DISCOVERY", "HERE_I_AM", myInfo.c_str());
             
             commandExecuted = true;
-            response = "HERE_I_AM_SENT";
+            responseStr = "HERE_I_AM_SENT";
         } else {
             Serial.print("WHOIS received for ");
             Serial.print(msg->node); // Print node instead of status
@@ -852,13 +864,13 @@ void handleControlCommand(uint8_t* senderMac, struct_message* msg) {
             // Determina lo stato del relè specifico per inviarlo come comando confermato
             int relayIndex = msg->topic[6] - '1';
             const char* actualCommandState = "0";
-            if (relayIndex >= 0 && relayIndex < 4) {
+            if (relayIndex >= 0 && relayIndex < MAX_RELAYS) {
                 actualCommandState = relayStates[relayIndex] ? "1" : "0";
             }
             
             // Invia lo stato effettivo di TUTTI i relay per aggiornare gli attributi su HA
             String relayStatus = "";
-            for(int i=0; i<4; i++) relayStatus += relayStates[i] ? "1" : "0";
+            for(int i=0; i<MAX_RELAYS; i++) relayStatus += relayStates[i] ? "1" : "0";
             
             // Usa actualCommandState invece di msg->command per confermare lo stato reale
             sendResponse(senderMac, msg->topic, actualCommandState, relayStatus.c_str());
@@ -886,8 +898,19 @@ void sendDiscoveryRequest() {
 
 void sendGatewayRegistration() {
     if (gatewayFound) {
+        // Calcola il numero di canali attivi
+        int activeChannels = 0;
+        for(int i=0; i<MAX_RELAYS; i++) {
+            if (relayPins[i] != PIN_DISABLED) {
+                activeChannels++;
+            }
+        }
+        
+        // Costruisci il tipo nodo dinamico: RELAY_CONTROLLER_Esp8266_XCH
+        String dynamicNodeType = String(NODE_TYPE) + "_" + String(activeChannels) + "CH";
+        
         // Formato status: NODE_TYPE|FIRMWARE_VERSION
-        String registrationStatus = String(NODE_TYPE) + "|" + String(FIRMWARE_VERSION);
+        String registrationStatus = dynamicNodeType + "|" + String(FIRMWARE_VERSION);
         
         char regBuffer[256];
         snprintf(regBuffer, sizeof(regBuffer), "INVIATO - (\"node\":\"%s\")(\"topic\":\"CONTROL\")(\"command\":\"%s\")(\"status\":\"%s\")(\"type\":\"REGISTRATION\")(\"gateway_id\":\"%s\")",
@@ -988,9 +1011,11 @@ void manageLedFeedback() {
 void setup() {
     // Early init to prevent relay glitch on boot
     // Inizializza immediatamente i pin di default a LOW per evitare attivazioni spurie
-    for(int i=0; i<4; i++) {
-        pinMode(relayPins[i], OUTPUT);
-        digitalWrite(relayPins[i], LOW);
+    for(int i=0; i<MAX_RELAYS; i++) {
+        if (relayPins[i] != PIN_DISABLED) {
+            pinMode(relayPins[i], OUTPUT);
+            digitalWrite(relayPins[i], LOW);
+        }
     }
 
     // Inizializzazione Watchdog Timer (8 secondi)
@@ -1008,12 +1033,20 @@ void setup() {
 
     // Configurazione pin
     pinMode(SETUP_PIN, INPUT_PULLUP);
-    for(int i=0; i<4; i++) pinMode(relayPins[i], OUTPUT);
+    for(int i=0; i<MAX_RELAYS; i++) {
+        if (relayPins[i] != PIN_DISABLED) {
+            pinMode(relayPins[i], OUTPUT);
+        }
+    }
     pinMode(LED_STATUS, OUTPUT);
     
     // Stato iniziale: tutti i relè spenti
     int initialState = RELAY_ACTIVE_LOW ? HIGH : LOW;
-    for(int i=0; i<4; i++) digitalWrite(relayPins[i], initialState);
+    for(int i=0; i<MAX_RELAYS; i++) {
+        if (relayPins[i] != PIN_DISABLED) {
+            digitalWrite(relayPins[i], initialState);
+        }
+    }
     digitalWrite(LED_STATUS, HIGH); // LED spento (attivo basso)
     
     Serial.println("Pin configurati - Tutti i relè spenti");
@@ -1519,7 +1552,7 @@ void printSystemStatus() {
     }
     
     Serial.println("\n=== STATO RELÈ ===");
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < MAX_RELAYS; i++) {
         Serial.print("Relè "); Serial.print(i+1); Serial.print(": ");
         Serial.println(relayStates[i] ? "ACCESO" : "SPENTO");
     }

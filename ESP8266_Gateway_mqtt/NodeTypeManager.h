@@ -53,6 +53,34 @@ public:
 
     // Popola l'array di entità per un dato tipo di nodo
     static int getNodeConfig(const char* nodeType, NodeEntity* entities, int maxEntities) {
+        // --- 1. Gestione Dinamica per RL_CTRL_ESP8266_XCH ---
+        // Verifica se è un tipo dinamico "RL_CTRL_ESP8266_"
+        if (strstr(nodeType, "RL_CTRL_ESP8266_") != NULL) {
+            // Estrai il numero di canali dalla stringa (es. "..._3CH")
+            // Cerca l'ultimo underscore
+            const char* lastUnderscore = strrchr(nodeType, '_');
+            if (lastUnderscore) {
+                int channels = atoi(lastUnderscore + 1); // Parsa il numero dopo '_'
+                
+                // Limita al numero massimo di entità
+                if (channels > maxEntities) channels = maxEntities;
+                
+                // Genera dinamicamente le entità
+                for(int i=0; i<channels; i++) {
+                    snprintf(entities[i].suffix, sizeof(entities[i].suffix), "relay_%d", i+1);
+                    snprintf(entities[i].name, sizeof(entities[i].name), "Relay %d", i+1);
+                    strncpy(entities[i].component, "switch", sizeof(entities[i].component));
+                    strncpy(entities[i].deviceClass, "outlet", sizeof(entities[i].deviceClass));
+                    strncpy(entities[i].icon, "mdi:power-socket-eu", sizeof(entities[i].icon));
+                    entities[i].attributeIndex = i;
+                }
+                
+                DevLog.printf("Dynamic Config: Generated %d entities for %s\n", channels, nodeType);
+                return channels;
+            }
+        }
+        
+        // --- 2. Gestione Standard da JSON ---
         // Ricarichiamo il config se necessario (per ora lo facciamo ogni volta per semplicità e RAM, 
         // ma in produzione si potrebbe cachare in memoria se c'è spazio)
         

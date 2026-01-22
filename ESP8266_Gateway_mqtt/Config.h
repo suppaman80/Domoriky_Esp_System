@@ -38,6 +38,11 @@ extern char ntp_server[64];
 extern long gmt_offset_sec;
 extern int daylight_offset_sec;
 
+// --- AUTO REBOOT CONFIGURATION --- //
+extern bool auto_reboot_enabled;
+extern int auto_reboot_hour;
+extern int auto_reboot_minute;
+
 // --- TIMEOUT CONFIGURATION --- //
 const unsigned long NETWORK_DISCOVERY_TIMEOUT = 5000;  // Increased to 5s
 const unsigned long PING_RESPONSE_TIMEOUT = 10000;     // Increased to 10s (was 3s)

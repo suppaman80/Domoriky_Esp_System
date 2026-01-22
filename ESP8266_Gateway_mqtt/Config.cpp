@@ -30,6 +30,11 @@ char ntp_server[64] = "pool.ntp.org";
 long gmt_offset_sec = 3600;      // GMT+1
 int daylight_offset_sec = 3600;  // DST+1
 
+// Auto Reboot Defaults
+bool auto_reboot_enabled = false;
+int auto_reboot_hour = 3;
+int auto_reboot_minute = 0;
+
 void loadConfigFromLittleFS() {
     if (!LittleFS.exists("/config.json")) {
         return;
@@ -86,6 +91,11 @@ void loadConfigFromLittleFS() {
     if (doc.containsKey("gmt_offset_sec")) gmt_offset_sec = doc["gmt_offset_sec"];
     if (doc.containsKey("daylight_offset_sec")) daylight_offset_sec = doc["daylight_offset_sec"];
 
+    // Auto Reboot Config
+    if (doc.containsKey("auto_reboot_enabled")) auto_reboot_enabled = doc["auto_reboot_enabled"];
+    if (doc.containsKey("auto_reboot_hour")) auto_reboot_hour = doc["auto_reboot_hour"];
+    if (doc.containsKey("auto_reboot_minute")) auto_reboot_minute = doc["auto_reboot_minute"];
+
     // Carica le credenziali WiFi se presenti
     if (doc["wifi_ssid"] && doc["wifi_password"]) {
         strncpy(saved_wifi_ssid, doc["wifi_ssid"], sizeof(saved_wifi_ssid) - 1);
@@ -114,6 +124,11 @@ void saveConfigToLittleFS() {
     doc["ntp_server"] = ntp_server;
     doc["gmt_offset_sec"] = gmt_offset_sec;
     doc["daylight_offset_sec"] = daylight_offset_sec;
+    
+    // Auto Reboot Config
+    doc["auto_reboot_enabled"] = auto_reboot_enabled;
+    doc["auto_reboot_hour"] = auto_reboot_hour;
+    doc["auto_reboot_minute"] = auto_reboot_minute;
 
     // Salva valori IP solo se modalità statica, altrimenti azzera
     if (strcmp(network_mode, "static") == 0) {

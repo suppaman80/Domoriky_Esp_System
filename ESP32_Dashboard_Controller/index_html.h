@@ -682,17 +682,53 @@ restoreBtn(false);
 });
 }
 function renderNodeCard(peer) {
-const isOnline = (peer.status && peer.status.toLowerCase() === 'offline') ? false : true;
-let attributes = peer.attributes;
-if (!attributes || typeof attributes !== 'string' || attributes === "null") attributes = "0000";
-let controlsHtml = '';
+        const isOnline = (peer.status && peer.status.toLowerCase() === 'offline') ? false : true;
+        let attributes = peer.attributes;
+        
+        // Dynamic Attribute Initialization
+        if (!attributes || typeof attributes !== 'string' || attributes === "null") {
+            let len = 4; // Default
+            if (peer.nodeType && peer.nodeType.indexOf('RL_CTRL_ESP8266') === 0) {
+                // Try to extract channel count from suffix (e.g. "RL_CTRL_ESP8266_6CH")
+                const parts = peer.nodeType.split('_');
+                const lastPart = parts[parts.length - 1];
+                if (lastPart && lastPart.endsWith("CH")) {
+                    const val = parseInt(lastPart.replace("CH", ""));
+                    if (!isNaN(val) && val > 0 && val <= 16) {
+                        len = val;
+                    }
+                }
+            }
+            attributes = "0".repeat(len);
+        }
+
+        let controlsHtml = '';
 let config = null;
 if (nodeTypesConfig[peer.nodeType]) {
 config = nodeTypesConfig[peer.nodeType];
 }
-else if (peer.nodeType && peer.nodeType.indexOf('RELAY') !== -1) {
-config = defaultRelayConfig;
-}
+else if (peer.nodeType && peer.nodeType.indexOf('RL_CTRL_ESP8266') === 0) {
+            let chCount = 4; // Default fallback
+            // Try to extract channel count from suffix (e.g. "RL_CTRL_ESP8266_3CH")
+            const parts = peer.nodeType.split('_');
+            const lastPart = parts[parts.length - 1];
+            if (lastPart && lastPart.endsWith("CH")) {
+                const val = parseInt(lastPart.replace("CH", ""));
+                if (!isNaN(val) && val > 0 && val <= 8) {
+                    chCount = val;
+                }
+            }
+            config = {
+                description: "Dynamic Relay Controller (" + chCount + "CH)",
+                entities: []
+            };
+            for(let i=1; i<=chCount; i++) {
+                config.entities.push({ suffix: "relay_" + i, type: "switch", name: "Relay " + i, idx: i-1 });
+            }
+        }
+        else if (peer.nodeType && peer.nodeType.indexOf('RELAY') !== -1) {
+            config = defaultRelayConfig;
+        }
 else if (!peer.nodeType || systemTypes.includes(peer.nodeType)) {
 config = defaultRelayConfig;
 }

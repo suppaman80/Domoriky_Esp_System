@@ -12,7 +12,7 @@ if /i "%vtype%"=="m" set vtype=minor
 if /i "%vtype%"=="M" set vtype=major
 
 set /p desc="Inserisci descrizione modifica (Invio per saltare): "
-powershell -ExecutionPolicy Bypass -Command "& './update_version.ps1' -Description '%desc%' -Type '%vtype%'"
+powershell -ExecutionPolicy Bypass -File ".\update_version.ps1" -Description "%desc%" -Type "%vtype%"
 echo.
 
 echo 📦 Fase 1: Compilazione...

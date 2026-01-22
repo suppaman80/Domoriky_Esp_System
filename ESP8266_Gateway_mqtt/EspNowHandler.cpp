@@ -163,21 +163,41 @@ void processMessageQueue() {
                                 }
                                 // Note: '0' is default for OFF/DOWN/CLOSE
                                 
+                                // Ensure attributes string is long enough for this index
+                                int currentLen = strlen(peerList[i].attributes);
+                                if (currentLen <= idx) {
+                                     for(int k=currentLen; k<=idx; k++) peerList[i].attributes[k] = '0';
+                                     peerList[i].attributes[idx+1] = '\0';
+                                }
+
                                 peerList[i].attributes[idx] = newState;
                                 break; 
                             }
                         }
                     }
                     // Fallback for legacy Relay logic if config fails (shouldn't happen given NodeTypes fallback)
-                    else if (strncmp(receivedData.topic, "relay_", 6) == 0) {
-                        int relayIdx = receivedData.topic[6] - '1'; // '1' -> 0
-                        if (relayIdx >= 0 && relayIdx < 4) {
-                            if (strlen(peerList[i].attributes) < 4) strcpy(peerList[i].attributes, "0000");
-                            char newState = (strcmp(receivedData.status, "1") == 0 || strcmp(receivedData.status, "ON") == 0) ? '1' : '0';
-                            peerList[i].attributes[relayIdx] = newState;
-                            peerList[i].attributes[4] = '\0';
+                else if (strncmp(receivedData.topic, "relay_", 6) == 0) {
+                    int relayIdx = receivedData.topic[6] - '1'; // '1' -> 0
+                    // Support up to 8 relays in fallback mode (was hardcoded to 4)
+                    if (relayIdx >= 0 && relayIdx < 8) {
+                        int currentLen = strlen(peerList[i].attributes);
+                        
+                        // Ensure attributes string is long enough for this index
+                        if (currentLen <= relayIdx) {
+                             for(int k=currentLen; k<=relayIdx; k++) peerList[i].attributes[k] = '0';
+                             peerList[i].attributes[relayIdx+1] = '\0';
                         }
+                        
+                        char newState = (strcmp(receivedData.status, "1") == 0 || strcmp(receivedData.status, "ON") == 0) ? '1' : '0';
+                        peerList[i].attributes[relayIdx] = newState;
+                        // Removed hardcoded termination at index 4
                     }
+                }
+
+                // ALWAYS Publish Status Update when attributes change
+                if (mqttConnected) {
+                    publishPeerStatus(i, "NODE_STATUS_UPDATE");
+                }
                     
                     // If node was offline, notify via MQTT
                     if (wasOffline && mqttConnected) {

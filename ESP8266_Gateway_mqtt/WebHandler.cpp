@@ -360,10 +360,24 @@ void handleRoot() {
     
     configServer.sendContent(F("<div class='section'><h2>📊 Stato Sistema</h2>"));
     configServer.sendContent(F("<div style='display:grid;grid-template-columns:1fr 1fr;gap:10px'>"));
-    configServer.sendContent("<div><b>💾 RAM Libera:</b> " + String(ESP.getFreeHeap()) + " bytes</div>");
-    configServer.sendContent("<div><b>🧩 Frammentazione:</b> " + String(ESP.getHeapFragmentation()) + "%</div>");
-    configServer.sendContent("<div><b>📂 Spazio Dati:</b> " + String(fs_info.usedBytes) + "/" + String(fs_info.totalBytes) + " bytes</div>");
-    configServer.sendContent("<div><b>⚡ CPU Freq:</b> " + String(ESP.getCpuFreqMHz()) + " MHz</div>");
+    
+    configServer.sendContent(F("<div><b>💾 RAM Libera:</b> "));
+    configServer.sendContent(String(ESP.getFreeHeap()));
+    configServer.sendContent(F(" bytes</div>"));
+
+    configServer.sendContent(F("<div><b>🧩 Frammentazione:</b> "));
+    configServer.sendContent(String(ESP.getHeapFragmentation()));
+    configServer.sendContent(F("%</div>"));
+
+    configServer.sendContent(F("<div><b>📂 Spazio Dati:</b> "));
+    configServer.sendContent(String(fs_info.usedBytes));
+    configServer.sendContent(F("/"));
+    configServer.sendContent(String(fs_info.totalBytes));
+    configServer.sendContent(F(" bytes</div>"));
+
+    configServer.sendContent(F("<div><b>⚡ CPU Freq:</b> "));
+    configServer.sendContent(String(ESP.getCpuFreqMHz()));
+    configServer.sendContent(F(" MHz</div>"));
     
     time_t now = time(nullptr);
     String timeStr = "In attesa di NTP...";
@@ -501,8 +515,25 @@ void handleSettings() {
     configServer.sendContent(F("<div class='form-group'><label>LED di Stato:</label>"));
     configServer.sendContent(F("<div class='radio-group'><label><input type='checkbox' id='led_enabled' name='led_enabled' value='1' "));
     if (led_enabled) configServer.sendContent(F("checked"));
-    configServer.sendContent(F("> Attiva LED</label></div></div></div>"));
+    configServer.sendContent(F("> Attiva LED</label></div></div>"));
     
+    configServer.sendContent(F("<div class='section'><h2>🔄 Riavvio Automatico</h2>"));
+    configServer.sendContent(F("<div class='form-group'><label>Abilita Riavvio:</label>"));
+    configServer.sendContent(F("<div class='radio-group'><label><input type='checkbox' id='auto_reboot_enabled' name='auto_reboot_enabled' value='1' "));
+    if (auto_reboot_enabled) configServer.sendContent(F("checked"));
+    configServer.sendContent(F("> Attiva Riavvio Giornaliero</label></div></div>"));
+    
+    configServer.sendContent(F("<div style='display:flex;gap:10px'>"));
+    configServer.sendContent(F("<div class='form-group' style='flex:1'><label for='auto_reboot_hour'>Ora (0-23):</label>"));
+    configServer.sendContent(F("<input type='number' id='auto_reboot_hour' name='auto_reboot_hour' min='0' max='23' value='"));
+    configServer.sendContent(String(auto_reboot_hour));
+    configServer.sendContent(F("'></div>"));
+    
+    configServer.sendContent(F("<div class='form-group' style='flex:1'><label for='auto_reboot_minute'>Minuti (0-59):</label>"));
+    configServer.sendContent(F("<input type='number' id='auto_reboot_minute' name='auto_reboot_minute' min='0' max='59' value='"));
+    configServer.sendContent(String(auto_reboot_minute));
+    configServer.sendContent(F("'></div></div></div>"));
+
     configServer.sendContent(F("<div class='section'><h2>🌐 Configurazione IP</h2>"));
     configServer.sendContent(F("<div class='form-group'><label>Modalità IP:</label><div class='radio-group'>"));
     String dhcpChecked = (strcmp(network_mode, "dhcp") == 0) ? "checked" : "";
@@ -574,6 +605,31 @@ void handleSave() {
         } else {
              doc["led_enabled"] = false;
              led_enabled = false;
+        }
+
+        // Auto Reboot
+        if (configServer.hasArg("auto_reboot_enabled")) {
+             doc["auto_reboot_enabled"] = true;
+             auto_reboot_enabled = true;
+        } else {
+             doc["auto_reboot_enabled"] = false;
+             auto_reboot_enabled = false;
+        }
+        
+        if (configServer.hasArg("auto_reboot_hour")) {
+            int h = configServer.arg("auto_reboot_hour").toInt();
+            if (h >= 0 && h <= 23) {
+                doc["auto_reboot_hour"] = h;
+                auto_reboot_hour = h;
+            }
+        }
+        
+        if (configServer.hasArg("auto_reboot_minute")) {
+            int m = configServer.arg("auto_reboot_minute").toInt();
+            if (m >= 0 && m <= 59) {
+                doc["auto_reboot_minute"] = m;
+                auto_reboot_minute = m;
+            }
         }
 
         doc["network_mode"] = configServer.arg("network_mode");
@@ -828,26 +884,10 @@ void handleApiForceHaDiscovery() {
 }
 
 void handleNetworkDiscovery() {
-    networkDiscoveryActive = true;
-    networkDiscoveryStartTime = millis();
+    // UNIFIED LOGIC: Call the global discovery function from MqttHandler
+    triggerGlobalDiscovery();
     
-    // Invia broadcast discovery per nuovi nodi o nodi esistenti
-    uint8_t broadcastMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    espNow.send(broadcastMac, "GATEWAY", "DISCOVERY", "DISCOVERY", "REQUEST", "DISCOVERY", gateway_id);
-    
-    // For known peers, refresh HA Discovery immediately
-    if (mqttConnected) {
-        int refreshed = 0;
-        for (int i = 0; i < peerCount; i++) {
-            mqttClient.loop(); // Keep alive
-            HaDiscovery::publishDiscovery(mqttClient, peerList[i], mqtt_topic_prefix, true); // Force RESET
-            HaDiscovery::publishDashboardConfig(mqttClient, peerList[i], mqtt_topic_prefix);
-            refreshed++;
-        }
-        DevLog.printf("Discovery refresh sent for %d known peers\n", refreshed);
-    }
-    
-    configServer.send(200, "application/json", "{\"message\":\"Discovery started\"}");
+    configServer.send(200, "application/json", "{\"message\":\"Discovery started (Global)\"}");
 }
 
 void handlePingNetwork() {

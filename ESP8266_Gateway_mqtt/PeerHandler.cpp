@@ -5,6 +5,9 @@
 #include "NodeTypeManager.h"
 #include "WebLog.h"
 
+// Forward declaration
+int getRequiredAttributeLength(const char* nodeType);
+
 // Define global variables
 Peer peerList[MAX_PEERS];
 int peerCount = 0;
@@ -81,6 +84,18 @@ void savePeer(const uint8_t* mac_addr, const char* nodeId, const char* nodeType,
         peerList[peerIndex].nodeType[sizeof(peerList[peerIndex].nodeType) - 1] = '\0';
         dataChanged = true;
     }
+
+    // Ensure attributes are initialized/extended to the correct length for the node type
+    // This is critical for new 6/8 channel nodes to have valid state for all channels immediately
+    if (strlen(peerList[peerIndex].nodeType) > 0) {
+        int reqLen = getRequiredAttributeLength(peerList[peerIndex].nodeType);
+        int currLen = strlen(peerList[peerIndex].attributes);
+        if (currLen < reqLen) {
+            for(int k=currLen; k<reqLen; k++) peerList[peerIndex].attributes[k] = '0';
+            peerList[peerIndex].attributes[reqLen] = '\0';
+            dataChanged = true; // Mark as changed to force update
+        }
+    }
     
     if (strlen(firmwareVersion) > 0 && strcmp(peerList[peerIndex].firmwareVersion, firmwareVersion) != 0) {
         strncpy(peerList[peerIndex].firmwareVersion, firmwareVersion, sizeof(peerList[peerIndex].firmwareVersion) - 1);
@@ -111,6 +126,22 @@ void savePeer(const uint8_t* mac_addr, const char* nodeId, const char* nodeType,
             HaDiscovery::publishDashboardConfig(mqttClient, peerList[peerIndex], mqtt_topic_prefix);
         }
     }
+}
+
+int getRequiredAttributeLength(const char* nodeType) {
+    // Logic specifically for Relay Controllers where attribute length maps 1:1 to channel count (binary state)
+    
+    // 1. Dynamic 6/8 CH Relays
+    if (strstr(nodeType, "RL_CTRL_ESP8266_") != NULL) {
+        const char* lastUnderscore = strrchr(nodeType, '_');
+        if (lastUnderscore) return atoi(lastUnderscore + 1);
+    }
+    
+    // 2. Standard Relay Controller
+    if (strcmp(nodeType, "RELAY_CONTROLLER_Esp8266") == 0) return 4;
+    
+    // 3. Ignore others (Shutters, etc.) to avoid truncating text attributes like "OPEN"
+    return 0;
 }
 
 void loadPeersFromLittleFS() {
@@ -156,12 +187,17 @@ void loadPeersFromLittleFS() {
                 strncpy(peerList[peerCount].nodeId, peer["nodeId"] | "", sizeof(peerList[peerCount].nodeId) - 1);
                 strncpy(peerList[peerCount].nodeType, peer["nodeType"] | "", sizeof(peerList[peerCount].nodeType) - 1);
                 strncpy(peerList[peerCount].firmwareVersion, peer["firmwareVersion"] | "", sizeof(peerList[peerCount].firmwareVersion) - 1);
-                strncpy(peerList[peerCount].attributes, peer["attributes"] | "0000", sizeof(peerList[peerCount].attributes) - 1);
+                strncpy(peerList[peerCount].attributes, peer["attributes"] | "", sizeof(peerList[peerCount].attributes) - 1);
                 peerList[peerCount].attributes[sizeof(peerList[peerCount].attributes) - 1] = '\0';
                 
-                // Ensure attributes are valid
-                if (strlen(peerList[peerCount].attributes) < 4) {
-                    strcpy(peerList[peerCount].attributes, "0000");
+                // Ensure attributes are valid and have correct length
+                int reqLen = getRequiredAttributeLength(peerList[peerCount].nodeType);
+                int currLen = strlen(peerList[peerCount].attributes);
+                
+                if (currLen < reqLen) {
+                    // Extend with '0's
+                    for(int k=currLen; k<reqLen; k++) peerList[peerCount].attributes[k] = '0';
+                    peerList[peerCount].attributes[reqLen] = '\0';
                 }
                 
                 // Validazione base del nodo caricato
@@ -180,7 +216,7 @@ void loadPeersFromLittleFS() {
 }
 
 void savePeersToLittleFS() {
-    DynamicJsonDocument doc(4096);
+    DynamicJsonDocument doc(2048);
     JsonArray peers = doc.createNestedArray("peers");
 
     for (int i = 0; i < peerCount; i++) {

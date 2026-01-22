@@ -181,8 +181,17 @@ void handleResetButton() {
             resetWiFiConfig();
         }
         else {
-            // Pressione troppo breve (< 5 sec)
-            DevLog.println("ℹ️ Reset button released too early");
+            // Pressione troppo breve (< 5 sec) -> GLOBAL DISCOVERY / REFRESH
+            DevLog.println("🔘 Short Press: Triggering Global Discovery...");
+            triggerGlobalDiscovery();
+            
+            // Feedback LED rapido
+            for(int i=0; i<3; i++) {
+                digitalWrite(LED_BUILTIN, !ledState);
+                delay(100);
+                digitalWrite(LED_BUILTIN, ledState);
+                delay(100);
+            }
         }
     }
     else if (currentState && resetButtonPressed) {
@@ -661,6 +670,28 @@ void loop() {
     
     // Gestione comandi seriali (sempre attivo)
     handleSerialCommands();
+    
+    // Gestione Riavvio Automatico
+    if (auto_reboot_enabled) {
+        static unsigned long lastRebootCheck = 0;
+        if (millis() - lastRebootCheck > 10000) { // Check ogni 10 secondi
+            lastRebootCheck = millis();
+            
+            time_t now = time(nullptr);
+            if (now > 100000) { // Data valida
+                struct tm * timeinfo = localtime(&now);
+                if (timeinfo->tm_hour == auto_reboot_hour && timeinfo->tm_min == auto_reboot_minute) {
+                    // Evita riavvio immediato dopo boot (uptime < 2 min)
+                    if (millis() > 120000) {
+                        DevLog.printf("🔄 AUTO REBOOT TRIGGERED at %02d:%02d\n", timeinfo->tm_hour, timeinfo->tm_min);
+                        publishGatewayStatus("auto_reboot", "Scheduled daily reboot triggered", "REBOOT");
+                        delay(1000);
+                        ESP.restart();
+                    }
+                }
+            }
+        }
+    }
     
     // Removed delay(10) to maximize loop speed
 }

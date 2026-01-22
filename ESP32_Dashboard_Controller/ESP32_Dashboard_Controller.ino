@@ -856,6 +856,51 @@ void handleApiData() {
     server.send(200, "application/json", response);
 }
 
+void handleApiNodeTypes() {
+    DynamicJsonDocument doc(4096);
+    
+    // Default 4-Channel Relay Controller
+    JsonObject relay4 = doc.createNestedObject("4_RELAY_CONTROLLER");
+    relay4["description"] = "Default 4-Relay";
+    JsonArray entities4 = relay4.createNestedArray("entities");
+    for(int i=1; i<=4; i++) {
+        JsonObject e = entities4.createNestedObject();
+        e["suffix"] = "relay_" + String(i);
+        e["type"] = "switch";
+        e["name"] = "Relay " + String(i);
+        e["idx"] = i-1;
+    }
+
+    // 6-Channel Relay Controller
+    JsonObject relay6 = doc.createNestedObject("RELAY_CONTROLLER_Esp8266_6CH");
+    relay6["description"] = "6-Channel Relay";
+    JsonArray entities6 = relay6.createNestedArray("entities");
+    for(int i=1; i<=6; i++) {
+        JsonObject e = entities6.createNestedObject();
+        e["suffix"] = "relay_" + String(i);
+        e["type"] = "switch";
+        e["name"] = "Relay " + String(i);
+        e["idx"] = i-1;
+    }
+
+    // 8-Channel Relay Controller
+    JsonObject relay8 = doc.createNestedObject("RELAY_CONTROLLER_Esp8266_8CH");
+    relay8["description"] = "8-Channel Relay";
+    JsonArray entities8 = relay8.createNestedArray("entities");
+    for(int i=1; i<=8; i++) {
+        JsonObject e = entities8.createNestedObject();
+        e["suffix"] = "relay_" + String(i);
+        e["type"] = "switch";
+        e["name"] = "Relay " + String(i);
+        e["idx"] = i-1;
+    }
+
+    String response;
+    serializeJson(doc, response);
+    server.sendHeader("Cache-Control", "max-age=3600"); // Cache for 1 hour
+    server.send(200, "application/json", response);
+}
+
 void handleApiCommand() {
     if (!server.hasArg("plain")) {
         server.send(400, "application/json", "{\"error\":\"Body missing\"}");
@@ -993,24 +1038,21 @@ void handleApiCommand() {
             return;
         }
 
-        if (cmd == "LIST_PEERS_GLOBAL") {
-            DevLog.println("[CMD] Avvio scansione rete globale (LIST_PEERS)...");
+        // Unified Discovery Logic: Both commands trigger Global Discovery on Gateway
+        if (cmd == "LIST_PEERS_GLOBAL" || cmd == "NETWORK_DISCOVERY") {
+            DevLog.printf("[CMD] Avvio Global Discovery (%s)...\n", cmd.c_str());
             
             for (const auto& prefix : knownPrefixes) {
                 String cmdTopic = prefix + "/gateway/command";
                 
-                DevLog.printf("[CMD] Sending Discovery to prefix: %s\n", prefix.c_str());
+                DevLog.printf("[CMD] Sending DISCOVERY to prefix: %s\n", prefix.c_str());
 
-                mqttClient.publish(cmdTopic.c_str(), "{\"command\":\"GATEWAY_HEARTBEAT\"}");
-                delay(20);
-                
-                mqttClient.publish(cmdTopic.c_str(), "{\"command\":\"LIST_PEERS\"}");
-                delay(20);
-                
-                mqttClient.publish(cmdTopic.c_str(), "{\"command\":\"PING_NETWORK\"}");
+                // Send unified DISCOVERY command to Gateway
+                // This triggers: Heartbeat + Dashboard Discovery + HA Publish + Peer Status + List Peers
+                mqttClient.publish(cmdTopic.c_str(), "{\"command\":\"DISCOVERY\"}");
             }
             
-            server.send(200, "application/json", "{\"status\":\"discovery_sent_global\"}");
+            server.send(200, "application/json", "{\"status\":\"discovery_sent_global\", \"command\":\"DISCOVERY\"}");
             return;
         } 
         else {
@@ -1394,6 +1436,7 @@ void setup() {
             handleRoot();
         });
         server.on("/api/data", HTTP_GET, handleApiData);
+        server.on("/api/nodetypes", HTTP_GET, handleApiNodeTypes);
         server.on("/api/command", HTTP_POST, handleApiCommand);
         
         server.on("/debug", HTTP_GET, []() {
@@ -1464,6 +1507,50 @@ void setup() {
             DevLog.println("[CMD] Manual Update Check requested via Web UI");
             checkGithubUpdates(); // Force check
             server.send(200, "application/json", "{\"status\":\"checked\"}");
+        });
+
+        // --- SIMPLE GET COMMAND API (User Request) ---
+        // Usage: http://<IP>/api/control?node=NODE_NAME&relay=RELAY_NUM&cmd=ON|OFF|SWITCH
+        // Example: http://192.168.99.18/api/control?node=CUCINA&relay=1&cmd=ON
+        server.on("/api/control", HTTP_GET, []() {
+             if (!server.hasArg("node") || !server.hasArg("relay") || !server.hasArg("cmd")) {
+                 server.send(400, "text/plain", "Missing params. Usage: /api/control?node=X&relay=Y&cmd=ON");
+                 return;
+             }
+             
+             String nodeId = server.arg("node");
+             String relayNum = server.arg("relay");
+             String cmdStr = server.arg("cmd");
+             
+             String cmdVal = "2"; // Default SWITCH
+             if (cmdStr.equalsIgnoreCase("ON") || cmdStr == "1") cmdVal = "1";
+             else if (cmdStr.equalsIgnoreCase("OFF") || cmdStr == "0") cmdVal = "0";
+             
+             // Prepare MQTT Command
+             DynamicJsonDocument cmdDoc(512);
+             cmdDoc["Node"] = nodeId;
+             cmdDoc["Topic"] = "relay_" + relayNum;
+             cmdDoc["Command"] = cmdVal;
+             cmdDoc["Type"] = "COMMAND";
+             cmdDoc["Status"] = "REQUEST";
+             
+             String payload;
+             serializeJson(cmdDoc, payload);
+             
+             // Find Prefix
+             String targetPrefix = String(mqtt_topic_prefix);
+             if (peers.count(nodeId)) {
+                 String gwId = peers[nodeId].gatewayId;
+                 if (gwId.length() > 0 && gateways.count(gwId) && gateways[gwId].mqttPrefix.length() > 0) {
+                     targetPrefix = gateways[gwId].mqttPrefix;
+                 }
+             }
+             
+             String topic = targetPrefix + "/nodo/command";
+             mqttClient.publish(topic.c_str(), payload.c_str());
+             
+             DevLog.printf("[API-GET] Sent command to %s: Relay %s -> %s\n", nodeId.c_str(), relayNum.c_str(), cmdStr.c_str());
+             server.send(200, "text/plain", "OK: Command Sent");
         });
 
         webSocket.begin();

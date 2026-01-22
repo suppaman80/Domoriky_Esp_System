@@ -1,6 +1,6 @@
 @echo off
 echo ===================================================
-echo COMPILAZIONE BINARI Configurable_Relay_Node
+echo COMPILAZIONE BINARI RELAY_CONTROLLER_Esp8266
 echo ===================================================
 echo.
 

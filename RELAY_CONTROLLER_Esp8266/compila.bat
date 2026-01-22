@@ -17,7 +17,7 @@ echo.
 
 echo 📦 Fase 1: Compilazione...
 cd /d "%~dp0"
-arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 4_RELAY_CONTROLLER.ino --libraries ../libraries
+arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 RELAY_CONTROLLER_Esp8266.ino --libraries ../libraries
 
 if %errorlevel% neq 0 (
     echo ❌ Errore durante la compilazione!

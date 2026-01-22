@@ -85,10 +85,13 @@ void onMqttDisconnect() {
 
 // Callback per messaggi MQTT ricevuti
 void onMqttMessage(char* topic, byte* payload, unsigned int length) {
-    // Converte payload in stringa
-    String message = "";
-    for (unsigned int i = 0; i < length; i++) {
-        message += (char)payload[i];
+    // Converte payload in stringa in modo efficiente per evitare frammentazione
+    String message;
+    if (length > 0) {
+        message.reserve(length);
+        for (unsigned int i = 0; i < length; i++) {
+            message += (char)payload[i];
+        }
     }
     
     String topicStr = String(topic);
@@ -357,8 +360,9 @@ void publishPeerStatus(int i, const char* command) {
 void sendGatewayHeartbeat() {
     unsigned long currentTime = millis();
     
-    // Crea JSON per il heartbeat del gateway (aumentato buffer a 2048 bytes per evitare troncamenti)
-    DynamicJsonDocument gatewayHeartbeatDoc(2048);
+    // Crea JSON per il heartbeat del gateway (ridotto buffer a 1024 bytes se possibile, ma 2048 è sicuro per molti peer)
+    // Ottimizzazione: Usiamo 1536 che è un buon compromesso
+    DynamicJsonDocument gatewayHeartbeatDoc(1536);
     gatewayHeartbeatDoc["command"] = "GATEWAY_HEARTBEAT";
     gatewayHeartbeatDoc["gatewayId"] = gateway_id;
     gatewayHeartbeatDoc["mac"] = WiFi.macAddress();
@@ -421,6 +425,48 @@ void sendDashboardDiscovery() {
     String dashboardDiscoveryTopic = String(mqtt_topic_prefix) + "/dashboard/discovery";
     mqttClient.publish(dashboardDiscoveryTopic.c_str(), "{\"command\":\"DISCOVER\"}");
     DevLog.printf("📡 Manual Dashboard Discovery sent to: %s\n", dashboardDiscoveryTopic.c_str());
+}
+
+void triggerGlobalDiscovery() {
+    DevLog.println("🌍 GLOBAL DISCOVERY TRIGGERED");
+    
+    // 1. Send Gateway Heartbeat
+    sendGatewayHeartbeat();
+    
+    // 2. Announce Dashboard
+    sendDashboardDiscovery();
+    
+    // 3. Publish Discovery for all Peers
+    if (mqttClient.connected()) {
+        for (int i = 0; i < peerCount; i++) {
+            // HA Discovery (Force Reset)
+            HaDiscovery::publishDiscovery(mqttClient, peerList[i], mqtt_topic_prefix, true); 
+            
+            // Dashboard Config
+            HaDiscovery::publishDashboardConfig(mqttClient, peerList[i], mqtt_topic_prefix);
+            
+            // Peer Status (Attributes, etc)
+            publishPeerStatus(i, "DISCOVERY_TRIGGERED");
+            
+            // Availability
+            String availTopic = String(mqtt_topic_prefix) + "/nodo/" + String(peerList[i].nodeId) + "/availability";
+            mqttClient.publish(availTopic.c_str(), "online", true);
+            
+            // Small delay to prevent buffer overflow
+            delay(50);
+        }
+    }
+
+    // 4. Broadcast Discovery Request (ESP-NOW) to find new nodes
+    uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    espNow.send(broadcastAddress, "GATEWAY", "DISCOVERY", "DISCOVERY", "REQUEST", "DISCOVERY", gateway_id);
+    
+    // 5. Send List to Dashboard
+    listPeers();
+
+    // 6. Set active discovery flag
+    networkDiscoveryActive = true;
+    networkDiscoveryStartTime = millis();
 }
 
 void performOTA(String url) {
@@ -735,44 +781,10 @@ void processMqttCommand(const String& msgStr) {
             return;
         }
         
-        // Comando NETWORK_DISCOVERY con formato JSON
-        if (command == "NETWORK_DISCOVERY") {
-            DevLog.println("RICEVUTO - Comando: NETWORK_DISCOVERY");
-            
-            // 1. Invia IMMEDIATAMENTE la configurazione a HA per tutti i nodi noti
-            // Questo allinea il comportamento a quello dell'avvio (onMqttConnect)
-            int refreshed = 0;
-
-            // Ensure Gateway Availability is ONLINE (Critical for HA Discovery availability_topic)
-            String gatewayAvailTopic = String(mqtt_topic_prefix) + "/gateway/availability";
-            mqttClient.publish(gatewayAvailTopic.c_str(), "online", true);
-
-            for (int i = 0; i < peerCount; i++) {
-                mqttClient.loop(); // Keep connection alive
-
-                // Publish Config (Discovery) - Force RESET to ensure HA picks it up
-                HaDiscovery::publishDiscovery(mqttClient, peerList[i], mqtt_topic_prefix, true);
-                HaDiscovery::publishDashboardConfig(mqttClient, peerList[i], mqtt_topic_prefix);
-                
-                // Publish Status and Availability
-                publishPeerStatus(i, "FORCE_DISCOVERY"); 
-                
-                // Force Availability to ONLINE explicitly
-                String availTopic = String(mqtt_topic_prefix) + "/nodo/" + String(peerList[i].nodeId) + "/availability";
-                mqttClient.publish(availTopic.c_str(), "online", true);
-
-                refreshed++;
-            }
-            DevLog.printf("Discovery MQTT: Refreshed %d known peers immediately\n", refreshed);
-
-            // 2. Invia richiesta di discovery broadcast per trovare nuovi nodi o risvegliare quelli esistenti
-            uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-            espNow.send(broadcastAddress, "GATEWAY", "DISCOVERY", "DISCOVERY", "REQUEST", "DISCOVERY", gateway_id);
-            
-            // Imposta flag per inviare lista aggiornata dopo timeout
-            networkDiscoveryActive = true;
-            networkDiscoveryStartTime = millis();
-            
+        // Comando NETWORK_DISCOVERY / DISCOVERY con formato JSON
+        if (command == "NETWORK_DISCOVERY" || command == "DISCOVERY") {
+            DevLog.println("RICEVUTO - Comando: DISCOVERY / NETWORK_DISCOVERY");
+            triggerGlobalDiscovery();
             commandHandled = true;
             return;
         }
